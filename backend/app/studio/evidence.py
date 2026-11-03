@@ -71,6 +71,7 @@ class Evidence:
     cost_usd: float = 0.0
     seconds: float = 0.0
     parts: dict[str, bool] = field(default_factory=dict)
+    ledger: list = field(default_factory=list)  # the Meta client's cost entries (tokens, reasoning, units) for the cost breakdown
 
 
 # ------------------------------------------------------------------ collecting
@@ -167,6 +168,7 @@ async def collect_evidence(video_path: str, work_dir: str, progress: Callable[[s
     except Exception as e:  # nothing here may break an analysis
         notes.append(f"extra evidence stopped: {type(e).__name__}: {config.redact(str(e))[:200]}")
         log.warning("[Evidence] stopped: %s", config.redact(str(e))[:200])
+    ev.ledger = list(client.ledger) if client else []
     ev.cost_usd = round(client.total_cost if client else 0.0, 6)
     ev.cost_usd += _signals_cost(ev.signals)
     ev.seconds = round(time.time() - start, 1)
@@ -176,6 +178,8 @@ async def collect_evidence(video_path: str, work_dir: str, progress: Callable[[s
 def _signals_cost(s: SignalsStage | None) -> float:
     if not s:
         return 0.0
+    if s.cost_usd:  # GPU seconds on the Modal container x the (configurable) rate: one figure for the total and the breakdown
+        return round(s.cost_usd, 6)
     return round(sum(m.cost_usd for m in s.models.values()) + (s.demucs.cost_usd or 0.0), 6)
 
 

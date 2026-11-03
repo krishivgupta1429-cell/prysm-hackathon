@@ -400,7 +400,7 @@ class AsyncAnthropic:
         reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
         price_in, price_out = config.price_per_m(body["model"])
         cost = round((tin * price_in + tout * price_out) / 1e6, 6)
-        meta._charge("spark", body["model"], cost)
+        meta._charge("wonder" if body["model"] == config.WONDER_MODEL else "spark", body["model"], cost, tin, tout, reasoning)
         finish = choice.get("finish_reason")
         log.info("[MetaShim] %s: %d in / %d out (%d reasoning) $%.4f in %.1fs", body["model"], tin, tout, reasoning, cost,
                  time.time() - start)

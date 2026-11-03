@@ -792,6 +792,9 @@ async def get_analysis_detail(
     if analysis.first_frame_b64 and not raw.get("first_frame_b64"):
         raw["first_frame_b64"] = analysis.first_frame_b64
 
+    from app.studio.cost_access import strip_cost  # hackathon: the cost breakdown is never part of the normal payload
+    strip_cost(raw, current_user.email)
+
     # Include feedback if exists
     if analysis.feedback:
         raw["feedback"] = {
@@ -805,6 +808,23 @@ async def get_analysis_detail(
         }
 
     return raw
+
+
+@router.get("/dashboard/{analysis_id}/cost")
+async def get_analysis_cost(
+    analysis_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Hackathon: the per-analysis cost breakdown, for the founder (or local testing with STUDIO_EXPOSE_COST=1) only; 404 for everyone else."""
+    from app.studio.cost_access import cost_visible
+    if not cost_visible(current_user.email):
+        raise HTTPException(status_code=404, detail="Not found")
+    row = (await db.execute(select(PrysmAnalysis.cost_breakdown, PrysmAnalysis.total_cost_usd).where(
+        PrysmAnalysis.id == analysis_id, PrysmAnalysis.user_id == current_user.id))).first()
+    if not row or not row[0]:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"cost": row[0], "total_usd": row[1]}
 
 
 # -- Feedback loop -------------------------------------------------------------
@@ -1048,6 +1068,8 @@ async def get_shared_analysis(
             }
 
     # Strip private/heavy fields for public view
+    from app.studio.cost_access import strip_cost
+    strip_cost(raw, public=True)  # hackathon: no cost data on a public link
     raw.pop("frames", None)
     raw.pop("transcript", None)
     raw.pop("audioAnalysis", None)

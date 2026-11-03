@@ -1627,7 +1627,8 @@ Return ONLY valid JSON:
     )
 
     # Capture token usage for cost tracking
-    _vision_usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens, "model": _resp_model(response, "claude-sonnet-4-6")}
+    _vision_usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens, "model": _resp_model(response, "claude-sonnet-4-6"),
+                     "reasoning_tokens": getattr(response, "reasoning_tokens", 0), "cost_usd": getattr(response, "cost_usd", 0.0)}  # hackathon: cost breakdown
 
     raw = response.content[0].text
     if settings.META_MODE:
@@ -2698,6 +2699,9 @@ async def run_full_analysis(
             "input_tokens": resp_a.usage.input_tokens + resp_b.usage.input_tokens,
             "output_tokens": resp_a.usage.output_tokens + resp_b.usage.output_tokens,
             "model": _resp_model(resp_a, "claude-sonnet-4-6"),
+            "reasoning_tokens": getattr(resp_a, "reasoning_tokens", 0) + getattr(resp_b, "reasoning_tokens", 0),  # hackathon: cost breakdown
+            "cost_usd": getattr(resp_a, "cost_usd", 0.0) + getattr(resp_b, "cost_usd", 0.0),
+            "calls": 2,
         }
 
         def _clean_and_parse(raw: str, label: str) -> dict:
@@ -2738,6 +2742,9 @@ async def run_full_analysis(
                 )
                 _scoring_usage["input_tokens"] += retry.usage.input_tokens
                 _scoring_usage["output_tokens"] += retry.usage.output_tokens
+                _scoring_usage["reasoning_tokens"] = _scoring_usage.get("reasoning_tokens", 0) + getattr(retry, "reasoning_tokens", 0)
+                _scoring_usage["cost_usd"] = _scoring_usage.get("cost_usd", 0.0) + getattr(retry, "cost_usd", 0.0)
+                _scoring_usage["calls"] = _scoring_usage.get("calls", 2) + 1
                 return _clean_and_parse(retry.content[0].text, label + "-repair")
 
         if _pcb:
@@ -2883,8 +2890,10 @@ async def run_full_analysis(
         cost = CostTracker()
 
         # Vision call cost
+        _vision_usage_for_breakdown = None
         if vision_data and vision_data.get("_usage"):
             u = vision_data.pop("_usage")
+            _vision_usage_for_breakdown = dict(u)
             cost.add_claude(u["model"], u["input_tokens"], u["output_tokens"], label="Vision (frames)")
 
         # Scoring call cost
@@ -2892,8 +2901,12 @@ async def run_full_analysis(
             cost.add_claude(_scoring_usage["model"], _scoring_usage["input_tokens"], _scoring_usage["output_tokens"], label="Scoring (10 params)")
 
         # Gemini audio cost
+        _gemini_audio_cost, _gemini_audio_tokens = 0.0, (0, 0)
         if gemini_audio and gemini_audio.get("_usage"):
             u = gemini_audio.pop("_usage")
+            _gr = PRICING.get(u["model"], {"input": 1.25, "output": 10.0})
+            _gemini_audio_cost = (u["input_tokens"] * _gr["input"] + u["output_tokens"] * _gr["output"]) / 1_000_000
+            _gemini_audio_tokens = (u["input_tokens"], u["output_tokens"])
             cost.add_gemini(u["model"], u["input_tokens"], u["output_tokens"], label="Audio analysis (Gemini)")
 
         # Groq is free tier — no cost
@@ -2913,6 +2926,19 @@ async def run_full_analysis(
 
         logger.info(f"[Prysm] Total cost: ${cost.total_usd:.4f}")
         result["_cost"] = cost.summary()
+        if settings.META_MODE:
+            try:  # hackathon: per-analysis breakdown next to the baseline items (shown only to the founder / in local mode)
+                from app.studio import cost_breakdown as _cb
+                _breakdown = _cb.build(
+                    vision_usage=_vision_usage_for_breakdown, scoring_usage=_scoring_usage, gemini_audio_usd=_gemini_audio_cost,
+                    gemini_audio_tokens=_gemini_audio_tokens, evidence=_evidence, source_type=source_type,
+                    apify_usd=(apify_cost_usd if source_type == "link" and "apify_cost_usd" in locals() else None),
+                    acr_called=bool(audio_path), acr_matched=bool(gemini_audio and gemini_audio.get("songConfirmed")),
+                    trends_called=bool(trend_data), total_usd=cost.total_usd)
+                result["_cost"]["breakdown"] = _breakdown
+                logger.info(_cb.summary_line(_breakdown))
+            except Exception as _be:
+                logger.warning(f"[JobCost] breakdown failed (non-fatal): {_be}")
         if settings.META_MODE:
             from app.studio import evidence as _ev2
             _acr_found = bool(gemini_audio and gemini_audio.get("songConfirmed"))

@@ -119,6 +119,10 @@ class CostEntry:
     service: str
     detail: str
     usd: float
+    tokens_in: int = 0          # tokens / units behind the charge (hackathon cost breakdown); 0 when not applicable
+    tokens_out: int = 0         # completion tokens, including hidden reasoning tokens (that is how Meta bills them)
+    reasoning_tokens: int = 0
+    units: float = 0.0          # audio seconds (Voice Transcribe) or frames (SAM)
 
 
 def parse_sam_deltas(text: str) -> list[Detection]:
@@ -154,9 +158,11 @@ class MetaClient:
     def total_cost(self) -> float:
         return round(sum(e.usd for e in self.ledger), 6)
 
-    def _charge(self, service: str, detail: str, usd: float) -> None:
+    def _charge(self, service: str, detail: str, usd: float, tokens_in: int = 0, tokens_out: int = 0,
+                reasoning_tokens: int = 0, units: float = 0.0) -> None:
         with self._lock:
-            self.ledger.append(CostEntry(service, detail, usd))
+            self.ledger.append(CostEntry(service, detail, usd, int(tokens_in or 0), int(tokens_out or 0),
+                                         int(reasoning_tokens or 0), float(units or 0.0)))
 
     def _headers(self, extra: dict | None = None) -> dict:
         if not self.meta_key:
@@ -234,7 +240,8 @@ class MetaClient:
         tin, tout = usage.get("prompt_tokens"), usage.get("completion_tokens")
         price_in, price_out = config.price_per_m(model)
         cost = ((tin or 0) * price_in + (tout or 0) * price_out) / 1e6
-        self._charge("wonder" if model == config.WONDER_MODEL else "spark", model, cost)
+        reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
+        self._charge("wonder" if model == config.WONDER_MODEL else "spark", model, cost, tin, tout, reasoning)
         return WatchCall(text=text, tokens_in=tin, tokens_out=tout, cost_usd=round(cost, 6),
                          seconds=round(time.time() - start, 2), model=model)
 
@@ -289,7 +296,7 @@ class MetaClient:
         tin, tout, think = u.get("promptTokenCount"), u.get("candidatesTokenCount"), u.get("thoughtsTokenCount")
         price_in, price_out = config.GEMINI_USD_PER_M.get(model, (0.0, 0.0))
         cost = ((tin or 0) * price_in + ((tout or 0) + (think or 0)) * price_out) / 1e6
-        self._charge("gemini", model, cost)
+        self._charge("gemini", model, cost, tin, (tout or 0) + (think or 0))
         return GeminiCall(text=text, model=model, tokens_in=tin, tokens_out=tout, thinking_tokens=think,
                           cost_usd=round(cost, 6), seconds=round(time.time() - start, 2))
 
@@ -313,7 +320,7 @@ class MetaClient:
         j = self._with_retries("transcribe", call)
         ms = j.get("audioDurationMs")
         cost = (ms or 0) / 3_600_000 * config.VOICE_TRANSCRIBE_USD_PER_HOUR
-        self._charge("voice_transcribe", wav_path.name, cost)
+        self._charge("voice_transcribe", wav_path.name, cost, units=(ms or 0) / 1000)
         return VoiceCall(transcript=(j.get("transcript") or "").strip(), audio_duration_ms=ms,
                          session_id=j.get("sessionId"), turns=j.get("turns") or [], cost_usd=round(cost, 6),
                          seconds=round(time.time() - start, 2))
@@ -421,7 +428,7 @@ class MetaClient:
         frames = (completed.get("response", {}).get("usage") or {}).get("video_frames_processed")
         detections = parse_sam_deltas(text)
         cost = (frames or 0) * config.SAM_USD_PER_1000_FRAMES / 1000
-        self._charge("sam", prompt, cost)
+        self._charge("sam", prompt, cost, units=frames or 0)
         return SamCall(prompt=prompt, detections=detections, frames_processed=frames, events=len(events),
                        cost_usd=round(cost, 6), seconds=round(time.time() - start, 2))
 

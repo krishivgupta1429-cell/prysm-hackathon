@@ -96,7 +96,14 @@ def decode_array(enc: dict) -> np.ndarray:
 
 
 def gpu_price(gpu_name: str | None) -> float:
-    """Approximate Modal price per second for the GPU the container reported (L4 if unknown)."""
+    """Approximate Modal price per second for the GPU the container reported (L4 if unknown).
+    MODAL_USD_PER_GPU_SECOND overrides the table (a configurable rate; the cost is an estimate either way)."""
+    override = config.get_env("MODAL_USD_PER_GPU_SECOND")
+    if override:
+        try:
+            return float(override)
+        except ValueError:
+            pass
     name = (gpu_name or "").upper()
     for key, price in config.MODAL_GPU_USD_PER_S.items():
         if key in name:
