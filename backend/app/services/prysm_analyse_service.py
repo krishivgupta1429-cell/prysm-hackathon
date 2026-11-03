@@ -2914,6 +2914,8 @@ async def run_full_analysis(
         # RunPod engagement cost (exact — from executionTime in response)
         if engagement_data and engagement_data.get("_runpod_execution_ms"):
             cost.add_runpod(engagement_data.pop("_runpod_execution_ms"))
+        if engagement_data and engagement_data.get("_modal_cost_usd") is not None:
+            cost.add_other("Predicted viewer behaviour + Q-Align (Modal GPU, estimate)", "modal", engagement_data.pop("_modal_cost_usd"))
 
         # Apify cost — fetch exact cost from Apify runs API
         if source_type == "link" and result.get("_apify_run_id"):

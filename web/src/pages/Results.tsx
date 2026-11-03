@@ -12,6 +12,7 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { STUDIO_MODE } from '@/lib/config'
 import CostPanel from '@/studio/CostPanel'
+import ViewerBehaviourCard from '@/studio/ViewerBehaviourCard'
 
 interface Parameter {
   name: string
@@ -97,12 +98,15 @@ interface Result {
     visualSummary?: string
   }
   engagementPrediction?: {
-    nawp: number
-    ecr: number
-    hook_risk: 'low' | 'medium' | 'high'
-    retention_risk: 'low' | 'medium' | 'high'
-    source: 'runpod' | 'heuristic'
+    available?: boolean
+    reason?: string | null
+    nawp: number | null
+    ecr: number | null
+    hook_risk: 'low' | 'medium' | 'high' | null
+    retention_risk: 'low' | 'medium' | 'high' | null
+    source: 'runpod' | 'heuristic' | 'evqa' | 'qwen_zero_shot'
     interpretation: string
+    qalign?: { quality: number; aesthetic: number; band: string } | null
   }
   analysis_id?: string
   edited_video_key?: string
@@ -992,8 +996,13 @@ export default function Results({ injected }: { injected?: Record<string, unknow
               </details>
             )}
 
+            {/* ═══ Hackathon: Modal-served prediction (evqa / qwen_zero_shot) + Q-Align visual quality signal ═══ */}
+            {result.engagementPrediction && canSeePrediction && (result.engagementPrediction.source === 'evqa' || result.engagementPrediction.source === 'qwen_zero_shot') && (
+              <ViewerBehaviourCard ep={result.engagementPrediction} />
+            )}
+
             {/* ═══ ENGAGEMENT PREDICTION (RunPod AI) — Creator+ ═══ */}
-            {result.engagementPrediction && result.engagementPrediction.source === 'runpod' && (
+            {result.engagementPrediction && result.engagementPrediction.source === 'runpod' && result.engagementPrediction.ecr != null && result.engagementPrediction.nawp != null && (
               canSeePrediction ? (() => {
                 const ep = result.engagementPrediction!
                 const ecrRiskColor = ep.hook_risk === 'low' ? 'text-green-600' : ep.hook_risk === 'medium' ? 'text-amber-500' : 'text-red-500'
