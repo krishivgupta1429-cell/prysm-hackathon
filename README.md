@@ -14,7 +14,7 @@ Built for the Meta Global AI Developer Hackathon: the existing Prysm analysis en
 6. Two Muse Spark 1.3 scoring calls produce the 10 parameters; plain code computes the weighted overall score.
 7. Every Claude call goes through `app/studio/meta_llm_shim.py` (an `anthropic`-compatible shim) when `AI_PROVIDER=meta`; the `anthropic` package is not imported.
 8. Results are saved to Postgres, cached in Redis, shareable by link; ARIA streams from Muse Spark.
-9. A hidden safety net (daily spend cap, per-user limits) protects vendor spend; there are no plans or credits in demo mode.
+9. A hidden safety net (daily spend cap `STUDIO_DAILY_SPEND_CAP_USD`, default 10 USD; per-user limits) protects vendor spend; there are no plans or credits in demo mode.
 10. Heavy GPU models run on Modal; nothing heavy runs in the backend.
 
 ## Run it locally
