@@ -60,7 +60,7 @@ Every baseline file changed, and why. Everything except the model call sites is 
 | `backend/app/routers/admin.py` | Share URL base comes from `FRONTEND_URL` instead of a hard-coded production site. |
 | `backend/app/core/config.py` | New settings (`AI_PROVIDER`, `AUTO_EDIT_ENABLED`, `COACH_STYLE`, `DEBUG_SAVE_INPUTS`, `STUDIO_*` incl. `STUDIO_EXPOSE_COST`, `DEMO_AUTO_VERIFY`, `CORS_ORIGINS`, `TRUSTED_HOSTS`, `CSP_CONNECT_SRC`, `PROMOTE_EMAILS`, `META_MODE`); `extra=ignore`; production URLs and emails removed from defaults. |
 | `backend/app/core/middleware.py` | Rate limiter: the analysis status poll is exempt from the global per-IP limit (it keeps its own per-user limit of 120 a minute) and every window is fixed from its first request instead of being pushed back by each request (see "Changes to baseline behaviour"). |
-| `backend/app/main.py` | `DEV_BAKEOFF=1` (local only) mounts the bake-off review endpoints; | Promoted emails, CORS origins, trusted hosts and CSP read from settings; Razorpay CSP entries only when its key is set. |
+| `backend/app/main.py` | `DEV_BAKEOFF=1` (local only) mounts the bake-off review endpoints; promoted emails, CORS origins, trusted hosts and CSP read from settings; Razorpay CSP entries only when its key is set. |
 | `backend/app/services/r2_service.py` | Fails soft: logs once when R2 keys are missing. |
 | `backend/app/services/email_service.py` | Email footer uses `FRONTEND_URL`; production social links removed. |
 | `backend/Dockerfile`, `backend/.env.example` | Installs `requirements-studio.txt`; names of every new variable. |
