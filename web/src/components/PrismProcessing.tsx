@@ -1,7 +1,11 @@
 import { useState, useEffect } from 'react'
+import { STUDIO_MODE } from '@/lib/config'
+import { visibleStages, doneCount, stageState, type Progress } from '@/studio/progress'
 
 interface Props {
   status: string
+  /** The backend's real stage progress (demo mode); the screen follows it instead of simulated timers. */
+  progress?: Progress | null
 }
 
 const FACTS = [
@@ -14,7 +18,7 @@ const FACTS = [
   'Reels under 15 seconds have the highest completion rate',
 ]
 
-export default function PrismProcessing({ status }: Props) {
+export default function PrismProcessing({ status, progress }: Props) {
   const [elapsed, setElapsed] = useState(0)
   const [factIdx, setFactIdx] = useState(0)
 
@@ -124,8 +128,41 @@ export default function PrismProcessing({ status }: Props) {
           {status}
         </p>
 
-        {/* Time estimate */}
-        <p className="text-[14px] text-foreground/35 font-body mt-3">
+        {STUDIO_MODE && (
+          <div className="mt-5 text-left">
+            <div className="h-[3px] w-full rounded-full bg-foreground/[0.07] overflow-hidden">
+              {/* Real progress only: finished stages out of all of them, never full until the job is done */}
+              <div className="h-full rounded-full bg-foreground/40 transition-all duration-700"
+                style={{ width: `${Math.min(doneCount(progress) / visibleStages(progress).length, 0.95) * 100}%` }} />
+            </div>
+            <p className="text-[11px] text-foreground/30 font-body mt-2 text-center">
+              {doneCount(progress)} of {visibleStages(progress).length} steps done
+            </p>
+            <ul className="mt-4 space-y-1.5">
+              {visibleStages(progress).map(st => {
+                const state = stageState(progress, st.id)
+                return (
+                  <li key={st.id} className={`flex items-center gap-2.5 text-[12px] font-body ${
+                    state === 'pending' ? 'text-foreground/20' : state === 'running' ? 'text-foreground/70' : 'text-foreground/40'}`}>
+                    <span className="w-3 flex justify-center">
+                      {state === 'running'
+                        ? <span className="w-2 h-2 rounded-full border border-foreground/50 border-t-transparent animate-spin" />
+                        : state === 'pending' ? <span className="w-1.5 h-1.5 rounded-full bg-foreground/15" />
+                        : <span className="text-green-600/70">{state === 'done' ? '✓' : '–'}</span>}
+                    </span>
+                    {st.label}
+                  </li>
+                )
+              })}
+            </ul>
+            <p className="text-[12px] text-foreground/30 font-body mt-5 text-center leading-relaxed">
+              Most analyses take 2–3 minutes. The first one can take longer while the signal models warm up.
+            </p>
+          </div>
+        )}
+
+        {/* Time estimate (simulated, so not shown in demo mode where the real steps are listed) */}
+        {!STUDIO_MODE && <p className="text-[14px] text-foreground/35 font-body mt-3">
           {elapsed < 10
             ? 'This usually takes 2–3 minutes — sit tight'
             : elapsed < 60
@@ -135,7 +172,7 @@ export default function PrismProcessing({ status }: Props) {
             : elapsed < 180
             ? 'Wrapping up — just a little longer'
             : 'Taking a bit longer than usual — hang tight'}
-        </p>
+        </p>}
 
         {/* Animated dots */}
         <div className="flex justify-center gap-1.5 mt-4">

@@ -1,3 +1,5 @@
+import { SUPPORT_EMAIL } from '@/lib/config'
+
 export default function Cookies() {
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -126,8 +128,8 @@ export default function Cookies() {
           <h2 className="font-display text-xl font-semibold tracking-tight mb-4">7. Contact Us</h2>
           <p className="text-sm text-foreground/60 font-body leading-relaxed">
             Questions about our cookie practices? Reach us at{' '}
-            <a href="mailto:theprysm77@gmail.com" className="text-foreground/80 underline underline-offset-2 hover:text-foreground transition-colors">
-              theprysm77@gmail.com
+            <a href={`mailto:${SUPPORT_EMAIL}`} className="text-foreground/80 underline underline-offset-2 hover:text-foreground transition-colors">
+              {SUPPORT_EMAIL}
             </a>
           </p>
         </section>

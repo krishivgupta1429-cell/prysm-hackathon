@@ -3,8 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getToken, getUser, clearAuth, fetchUser, User } from '@/lib/auth'
 import { apiUrl } from '@/lib/api'
 import { getPlanLabel, getPlanCredits, getNextPlan } from '@/lib/plans'
-
-const RAILWAY_URL = 'https://YOUR-BACKEND-URL.example.com'
+import { STUDIO_MODE } from '@/lib/config'
 
 interface UsageEvent {
   id: string
@@ -67,7 +66,7 @@ export default function Settings() {
     if (ig === 'connected') setIgStatus('connected')
     else if (ig === 'error') setIgStatus('error')
     const tab = searchParams.get('tab')
-    if (tab === 'usage' || tab === 'billing') setActiveTab(tab as any)
+    if (!STUDIO_MODE && (tab === 'usage' || tab === 'billing')) setActiveTab(tab as any)
   }, [navigate])
 
   useEffect(() => {
@@ -147,11 +146,11 @@ export default function Settings() {
         {/* Header */}
         <div className="mb-8">
           <h1 className="font-display text-3xl font-black tracking-tight mb-1">Settings</h1>
-          <p className="text-foreground/35 text-sm font-body">Manage your account and subscription</p>
+          <p className="text-foreground/35 text-sm font-body">{STUDIO_MODE ? 'Manage your account' : 'Manage your account and subscription'}</p>
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-0 mb-8 border-b border-border">
+        {/* Tabs (demo mode has no usage or billing, so no tabs) */}
+        {!STUDIO_MODE && <div className="flex gap-0 mb-8 border-b border-border">
           {(['account', 'usage', 'billing'] as const).map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)}
               className="relative px-5 py-2.5 text-[13px] font-semibold font-body capitalize transition-all cursor-pointer"
@@ -167,12 +166,13 @@ export default function Settings() {
               )}
             </button>
           ))}
-        </div>
+        </div>}
 
         {/* ══════════════ ACCOUNT TAB ══════════════ */}
         {activeTab === 'account' && (
           <div className="space-y-5">
 
+            {!STUDIO_MODE && (<>
             {/* Plan card */}
             <div className={`rounded-2xl border ${planAccent.border} ${planAccent.bg} p-5`}>
               <div className="flex items-start justify-between mb-4">
@@ -204,7 +204,7 @@ export default function Settings() {
                 <p className="text-[11px] text-foreground/35 font-body">
                   {creditsConsumed} credits used this cycle
                 </p>
-                {getNextPlan(user?.plan) && (
+                {!STUDIO_MODE && getNextPlan(user?.plan) && (
                   <a href="/pricing"
                     className="text-[12px] font-body font-bold text-foreground/60 hover:text-foreground transition-colors border border-border rounded-lg px-3 py-1.5 hover:border-foreground/25 hover:bg-foreground/[0.03] transition-all">
                     Upgrade plan →
@@ -212,6 +212,8 @@ export default function Settings() {
                 )}
               </div>
             </div>
+
+            </>)}
 
             {/* Account info */}
             <div>
@@ -261,17 +263,19 @@ export default function Settings() {
                 </div>
                 {handleError && <p className="text-red-500 text-xs font-body text-right px-5 pb-3 -mt-1">{handleError}</p>}
 
+                {!STUDIO_MODE && (<>
                 <div className="h-px bg-border" />
 
                 <div className="flex justify-between items-center px-5 py-3.5">
                   <span className="text-sm text-foreground/40 font-body">Plan</span>
                   <span className={`text-sm font-semibold font-body ${planAccent.text}`}>{getPlanLabel(user?.plan)}</span>
                 </div>
+                </>)}
               </div>
             </div>
 
             {/* Instagram — localhost only */}
-            {window.location.hostname === 'localhost' && (
+            {window.location.hostname === 'localhost' && !STUDIO_MODE && (
               <div>
                 <p className="text-[10px] font-bold tracking-widest uppercase text-foreground/25 mb-3 font-body">Integrations</p>
                 <div className="border border-border rounded-xl p-5 bg-background">
@@ -291,7 +295,7 @@ export default function Settings() {
                         Connected
                       </div>
                     ) : (
-                      <a href={`${RAILWAY_URL}/auth/instagram?token=${getToken()}`}
+                      <a href={apiUrl(`/auth/instagram?token=${getToken()}`)}
                         className="px-4 py-2 rounded-xl bg-foreground text-background text-[12px] font-body font-bold hover:opacity-85 transition-opacity">
                         Connect →
                       </a>

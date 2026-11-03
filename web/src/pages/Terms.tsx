@@ -1,3 +1,5 @@
+import { SUPPORT_EMAIL, STUDIO_MODE } from '@/lib/config'
+
 export default function Terms() {
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -42,7 +44,17 @@ export default function Terms() {
           </ul>
         </section>
 
-        {/* 4. Credits & Billing */}
+        {/* 4. Credits & Billing (the demo has neither) */}
+        {STUDIO_MODE ? (
+        <section className="mb-10">
+          <h2 className="font-display text-xl font-semibold tracking-tight mb-4">4. Demo service</h2>
+          <ul className="space-y-2 text-sm text-foreground/60 font-body leading-relaxed list-disc list-inside">
+            <li>Prysm is a demonstration built for the Meta Global AI Developer Hackathon, provided free of charge</li>
+            <li>To keep the demo available to everyone, the number of analyses per person and per day may be limited</li>
+            <li>Uploaded videos and analysis files are deleted automatically after a short period</li>
+          </ul>
+        </section>
+        ) : (
         <section className="mb-10">
           <h2 className="font-display text-xl font-semibold tracking-tight mb-4">4. Credits & Billing</h2>
           <ul className="space-y-2 text-sm text-foreground/60 font-body leading-relaxed list-disc list-inside">
@@ -54,6 +66,7 @@ export default function Terms() {
             <li>No refunds on credits already used</li>
           </ul>
         </section>
+        )}
 
         {/* 5. Your Content */}
         <section className="mb-10">
@@ -75,7 +88,7 @@ export default function Terms() {
             <li>Violate intellectual property rights</li>
             <li>Use automated scraping or abuse our API</li>
             <li>Share account credentials with others</li>
-            <li>Attempt to reverse-engineer our systems or circumvent the credit system</li>
+            <li>Attempt to reverse-engineer our systems or circumvent {STUDIO_MODE ? 'usage limits' : 'the credit system'}</li>
             <li>Access our systems without authorization</li>
           </ul>
         </section>
@@ -103,7 +116,7 @@ export default function Terms() {
           <ul className="space-y-2 text-sm text-foreground/60 font-body leading-relaxed list-disc list-inside">
             <li>We aim for high uptime but do not guarantee uninterrupted service</li>
             <li>We may perform maintenance with or without prior notice</li>
-            <li>We may modify features or pricing with reasonable notice</li>
+            <li>We may modify features{STUDIO_MODE ? '' : ' or pricing'} with reasonable notice</li>
           </ul>
         </section>
 
@@ -138,8 +151,8 @@ export default function Terms() {
           <h2 className="font-display text-xl font-semibold tracking-tight mb-4">13. Contact</h2>
           <p className="text-sm text-foreground/60 font-body leading-relaxed">
             Questions about these terms? Reach us at{' '}
-            <a href="mailto:theprysm77@gmail.com" className="text-foreground/80 underline underline-offset-2 hover:text-foreground transition-colors">
-              theprysm77@gmail.com
+            <a href={`mailto:${SUPPORT_EMAIL}`} className="text-foreground/80 underline underline-offset-2 hover:text-foreground transition-colors">
+              {SUPPORT_EMAIL}
             </a>
           </p>
         </section>

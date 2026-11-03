@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Index from "./pages/Index";
 import Analyse from "./pages/Analyse";
 import AnalyseUpload from "./pages/AnalyseUpload";
@@ -26,6 +26,7 @@ import Terms from "./pages/Terms";
 import Cookies from "./pages/Cookies";
 import NotFound from "./pages/NotFound";
 import SmoothScroll from "./providers/SmoothScroll";
+import { STUDIO_MODE, ALLOW_LINKS } from "./lib/config";
 
 const queryClient = new QueryClient();
 
@@ -42,7 +43,7 @@ const App = () => (
             <Route path="/" element={<Index />} />
             <Route path="/analyse" element={gated ? <Waitlist /> : <Analyse />} />
             <Route path="/analyse/upload" element={gated ? <Waitlist /> : <AnalyseUpload />} />
-            <Route path="/analyse/link" element={gated ? <Waitlist /> : <AnalyseLink />} />
+            <Route path="/analyse/link" element={!ALLOW_LINKS ? <Navigate to="/analyse/upload" replace /> : gated ? <Waitlist /> : <AnalyseLink />} />
             <Route path="/results" element={gated ? <Waitlist /> : <Results />} />
             <Route path="/chat" element={gated ? <Waitlist /> : <Chat />} />
             <Route path="/login" element={<Login />} />
@@ -54,7 +55,7 @@ const App = () => (
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/settings" element={gated ? <Waitlist /> : <Settings />} />
-            <Route path="/pricing" element={<PricingPage />} />
+            <Route path="/pricing" element={STUDIO_MODE ? <Navigate to="/" replace /> : <PricingPage />} />
             <Route path="/share/:shareId" element={<SharedResults />} />
             <Route path="/waitlist" element={<Waitlist />} />
             <Route path="/privacy" element={<Privacy />} />

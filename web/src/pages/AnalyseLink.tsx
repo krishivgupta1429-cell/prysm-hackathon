@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { getUser, getToken, fetchUser } from '@/lib/auth'
 import { apiUrl, uploadUrl } from '@/lib/api'
 import { getNextPlan } from '@/lib/plans'
+import { STUDIO_MODE } from '@/lib/config'
+import { currentLabel, type Progress } from '@/studio/progress'
 import PrismProcessing from '@/components/PrismProcessing'
 
 const PENDING_JOB_KEY = 'prysm_pending_job'
@@ -33,6 +35,7 @@ export default function AnalyseLink() {
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState('')
+  const [progress, setProgress] = useState<Progress | null>(null)
   const [error, setError] = useState('')
   const [brief, setBrief] = useState('')
   const [urlValid, setUrlValid] = useState(false)
@@ -101,7 +104,7 @@ export default function AnalyseLink() {
     if (!brief.trim()) { setError('Tell us a bit about the video'); return }
 
     // Pre-check credits before starting the long download + analysis
-    if (user && user.credits < 3) {
+    if (!STUDIO_MODE && user && user.credits < 3) {
       setShowUpgradeModal(true)
       return
     }
@@ -111,7 +114,8 @@ export default function AnalyseLink() {
 
     const steps = PROCESSING_STEPS_COMPETITOR
     setStatus(steps[0].text)
-    const timers = steps.slice(1).map(s => setTimeout(() => setStatus(st => st ? s.text : st), s.delay))
+    // demo mode follows the backend's real stages instead of these simulated steps
+    const timers = (STUDIO_MODE ? [] : steps.slice(1)).map(s => setTimeout(() => setStatus(st => st ? s.text : st), s.delay))
 
     try {
       const formData = new FormData()
@@ -127,7 +131,7 @@ export default function AnalyseLink() {
       // Step 1: Submit — returns job_id in ~5 seconds
       const submitRes = await fetch(uploadUrl('/prysm/analyse'), { method: 'POST', body: formData, headers })
 
-      if (submitRes.status === 402) {
+      if (!STUDIO_MODE && submitRes.status === 402) {
         setError('')
         setLoading(false)
         setStatus('')
@@ -182,7 +186,12 @@ export default function AnalyseLink() {
             setTimeout(() => navigate('/results'), 500)
             return
           }
+          if (STUDIO_MODE && statusData.progress) {
+            setProgress(statusData.progress)
+            setStatus(currentLabel(statusData.progress))
+          }
           if (statusData.status === 'credits_exhausted') {
+            if (STUDIO_MODE) throw new Error('The analysis could not be completed — please try again.')
             localStorage.removeItem(PENDING_JOB_KEY)
             timers.forEach(clearTimeout)
             setLoading(false)
@@ -239,7 +248,7 @@ export default function AnalyseLink() {
     }
   }, [])
 
-  if (loading) return <PrismProcessing status={status} />
+  if (loading) return <PrismProcessing status={status} progress={progress} />
 
   // Slide animation class
   const slideClass = direction === 'forward'
@@ -257,7 +266,7 @@ export default function AnalyseLink() {
       </nav>
 
       {/* Low-credit warning banner */}
-      {user && user.credits > 0 && user.credits < 10 && (
+      {!STUDIO_MODE && user && user.credits > 0 && user.credits < 10 && (
         <div className="mx-3 sm:mx-8 mb-2 px-4 py-2.5 rounded-xl bg-amber-50/60 border border-amber-200/50 flex items-center justify-between gap-3">
           <p className="text-[12px] font-body text-amber-700/70">
             <span className="font-semibold">Running low —</span> {Math.round(user.credits * 10) / 10} credits left. Each analysis uses your credits.
@@ -516,7 +525,7 @@ export default function AnalyseLink() {
       </div>
 
       {/* ═══ CREDITS EXHAUSTED MID-ANALYSIS MODAL ═══ */}
-      {showExhaustedModal && (
+      {!STUDIO_MODE && showExhaustedModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
           <div className="bg-background border border-border rounded-2xl p-7 max-w-sm w-full shadow-2xl text-center"
             style={{ animation: 'fade-slide-in 0.3s ease-out' }}>
@@ -545,7 +554,7 @@ export default function AnalyseLink() {
       )}
 
       {/* ═══ UPGRADE MODAL ═══ */}
-      {showUpgradeModal && (
+      {!STUDIO_MODE && showUpgradeModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6"
           onClick={() => setShowUpgradeModal(false)}>
           <div onClick={e => e.stopPropagation()}

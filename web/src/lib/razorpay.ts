@@ -25,6 +25,18 @@ interface TopupOptions {
   onError: (message: string) => void
 }
 
+/** Razorpay's checkout script is only loaded when a payment is started (the site no longer loads it on every page). */
+function loadCheckout(): Promise<void> {
+  if (window.Razorpay) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js'
+    script.onload = () => resolve()
+    script.onerror = () => reject(new Error('Could not load the payment form'))
+    document.head.appendChild(script)
+  })
+}
+
 async function authHeaders() {
   const token = getToken()
   if (!token) throw new Error('Not logged in')
@@ -103,6 +115,7 @@ export async function subscribeToPlan({ plan, cycle, onSuccess, onError }: Subsc
       },
     }
 
+    await loadCheckout()
     const rzp = new window.Razorpay(options)
     rzp.on('payment.failed', (response: any) => {
       onError(response.error?.description || 'Payment failed')
@@ -167,6 +180,7 @@ export async function buyTopup({ pack, onSuccess, onError }: TopupOptions) {
       },
     }
 
+    await loadCheckout()
     const rzp = new window.Razorpay(options)
     rzp.on('payment.failed', (response: any) => {
       onError(response.error?.description || 'Payment failed')

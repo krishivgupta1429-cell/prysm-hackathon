@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { getToken, clearAuth, getUser } from '@/lib/auth'
 import { apiUrl } from '@/lib/api'
 import { canAccess, getNextPlan, getPlanCredits, getPlanLabel } from '@/lib/plans'
+import { SUPPORT_EMAIL, ALLOW_LINKS } from '@/lib/config'
+import { STUDIO_MODE } from '@/lib/config'
 
 
 interface ParamSummary { name: string; score: number; problem: string }
@@ -447,7 +449,7 @@ export default function Dashboard() {
         <a href="/" className="font-logo text-[18px] sm:text-[21px] text-foreground">PRYSM</a>
         <div className="flex items-center gap-2 sm:gap-4">
           <a href="/analyse" className="text-xs sm:text-sm text-foreground/40 hover:text-foreground/60 transition-colors hidden sm:block">New Analysis</a>
-          {(() => {
+          {!STUDIO_MODE && (() => {
             const credits = data?.user.credits ?? 0
             const maxCredits = Math.max(getPlanCredits(userPlan), credits)
             const pct = Math.min((credits / maxCredits) * 100, 100)
@@ -455,8 +457,8 @@ export default function Dashboard() {
             const isExhausted = credits <= 0
             const planLabel = getPlanLabel(userPlan)
             return isExhausted ? (
-              <a href="/pricing" className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-50 border border-red-200/40 hover:bg-red-100/60 transition-colors">
-                <span className="text-[10px] sm:text-[11px] text-red-600/70 font-body font-semibold">0 credits — Upgrade</span>
+              <a href={STUDIO_MODE ? undefined : '/pricing'} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-50 border border-red-200/40 hover:bg-red-100/60 transition-colors">
+                <span className="text-[10px] sm:text-[11px] text-red-600/70 font-body font-semibold">0 credits{STUDIO_MODE ? '' : ' — Upgrade'}</span>
               </a>
             ) : (
               <div className="relative group/credits">
@@ -476,7 +478,7 @@ export default function Dashboard() {
                     <div className="w-full h-1 bg-background/15 rounded-full overflow-hidden mb-2">
                       <div className="h-full rounded-full" style={{ width: `${pct}%`, background: isLow ? '#fbbf24' : 'linear-gradient(90deg, #fbbf24, #4ade80)' }} />
                     </div>
-                    {userPlan && userPlan.toLowerCase() !== 'creator' && (
+                    {!STUDIO_MODE && userPlan && userPlan.toLowerCase() !== 'creator' && (
                       <a href="/pricing" className="block mt-1 text-[10px] font-body font-semibold opacity-90 hover:opacity-100 transition-opacity">
                         Upgrade plan →
                       </a>
@@ -548,12 +550,12 @@ export default function Dashboard() {
       {/* ═══ QUICK ACTIONS — overlapping the dark/light transition ═══ */}
       <div ref={actionsReveal.ref} className={actionsReveal.className}>
         <div className="max-w-6xl mx-auto px-4 sm:px-6 -mt-1">
-          <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-6 sm:mb-8">
+          <div className={`grid ${ALLOW_LINKS ? 'grid-cols-3' : 'grid-cols-2'} gap-2 sm:gap-3 mb-6 sm:mb-8`}>
             {[
               { href: '/analyse/upload', label: 'Upload video', desc: 'Analyse before you post', icon: 'M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5', accent: '#22c55e' },
               { href: '/analyse/link', label: 'Paste a link', desc: 'Study any Instagram reel', icon: 'M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244', accent: '#f59e0b' },
               { href: null, label: 'Chat with Prysm', desc: 'Ask anything about your content', icon: 'M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z', accent: '#8b5cf6' },
-            ].map((a, i) => (
+            ].filter(a => ALLOW_LINKS || a.href !== '/analyse/link').map((a, i) => (
               <a key={i} href={a.href ?? undefined} onClick={!a.href ? (e) => { e.preventDefault(); openGeneralChat() } : undefined}
                 className="group relative rounded-xl sm:rounded-2xl p-3 sm:p-5 transition-all duration-300 cursor-pointer hover:-translate-y-1 bg-background border border-border overflow-hidden"
                 style={{
@@ -628,7 +630,7 @@ export default function Dashboard() {
               </svg>
             </div>
             <p className="text-foreground/40 text-base font-body mb-1">No analyses yet</p>
-            <p className="text-foreground/20 text-sm font-body mb-6">Upload a video or paste a link to get started</p>
+            <p className="text-foreground/20 text-sm font-body mb-6">{ALLOW_LINKS ? 'Upload a video or paste a link to get started' : 'Upload a video to get started'}</p>
             <a href="/analyse" className="inline-block px-8 py-3.5 rounded-xl bg-foreground text-background text-sm font-display font-semibold hover:opacity-90 transition-opacity">
               Run your first analysis →
             </a>
@@ -748,7 +750,7 @@ export default function Dashboard() {
                       <div className="absolute bottom-0 left-0 w-full h-[2px] bg-foreground/60 rounded-full" />
                     )}
                   </button>
-                  <button
+                  {ALLOW_LINKS && <button
                     onClick={() => setActiveTab('competitor')}
                     className={`px-4 py-2.5 text-sm font-display font-semibold transition-all relative cursor-pointer ${
                       activeTab === 'competitor'
@@ -763,7 +765,7 @@ export default function Dashboard() {
                     {activeTab === 'competitor' && (
                       <div className="absolute bottom-0 left-0 w-full h-[2px] bg-foreground/60 rounded-full" />
                     )}
-                  </button>
+                  </button>}
                 </div>
 
                 {/* My Videos tab content */}
@@ -813,7 +815,7 @@ export default function Dashboard() {
                               e.stopPropagation()
                               const subject = encodeURIComponent(`Prysm Analysis Feedback — Job #${a.id.slice(0, 8)} (Score: ${a.overall_score})`)
                               const body = encodeURIComponent(`Hi Prysm team,\n\nI'd like to report an issue with my analysis:\n\nAnalysis ID: ${a.id}\nScore received: ${a.overall_score}\nNiche: ${a.niche}\n\nIssue description:\n[Please describe the issue here]\n\nThank you`)
-                              window.open(`mailto:theprysm77@gmail.com?subject=${subject}&body=${body}`, '_blank')
+                              window.open(`mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`, '_blank')
                             }}
                             title="Report an issue with this analysis"
                             style={{
@@ -885,7 +887,7 @@ export default function Dashboard() {
                             e.stopPropagation()
                             const subject = encodeURIComponent(`Prysm Analysis Feedback — Job #${a.id.slice(0, 8)} (Score: ${a.overall_score})`)
                             const body = encodeURIComponent(`Hi Prysm team,\n\nI'd like to report an issue with my analysis:\n\nAnalysis ID: ${a.id}\nScore received: ${a.overall_score}\nNiche: ${a.niche}\n\nIssue description:\n[Please describe the issue here]\n\nThank you`)
-                            window.open(`mailto:theprysm77@gmail.com?subject=${subject}&body=${body}`, '_blank')
+                            window.open(`mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`, '_blank')
                           }}
                           title="Report an issue with this analysis"
                           style={{

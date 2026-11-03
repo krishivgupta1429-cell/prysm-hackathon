@@ -10,6 +10,7 @@ import {
   ChevronDown, Check, Lightbulb, Link2, CheckCircle2, Lock,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
+import { STUDIO_MODE } from '@/lib/config'
 
 interface Parameter {
   name: string
@@ -24,6 +25,7 @@ interface Parameter {
   howToDoIt: string
   whatToExpect: string
   referenceFrame?: number
+  label?: string | null   // Trend Alignment: "grounded (live trends)" or "estimate (no live trend data)"
   frameAnnotation?: string
 }
 
@@ -100,6 +102,13 @@ interface Result {
     retention_risk: 'low' | 'medium' | 'high'
     source: 'runpod' | 'heuristic'
     interpretation: string
+  }
+  analysis_id?: string
+  edited_video_key?: string
+  edit_plan?: { applied_params: string[]; skipped_params: string[] }
+  studio?: {
+    models_used?: { step: string; model: string; status: string; note?: string }[]
+    trends?: { status: string; sources?: { title: string; url: string }[]; hashtags?: string[]; formats?: string[]; audio?: string[] }
   }
 }
 
@@ -615,7 +624,7 @@ export default function Results() {
 
   // Plan gating — always uses verifiedPlan (fetched from backend on load, not localStorage)
   const userPlan = verifiedPlan
-  const isFreeUser = !userPlan || userPlan.toLowerCase() === 'free'
+  const isFreeUser = !STUDIO_MODE && (!userPlan || userPlan.toLowerCase() === 'free')
   const canSeeCaptions = canAccess.captionsAndHashtags(userPlan)
   const canSeeBlueprint = canAccess.videoBlueprint(userPlan)
   const canSeeAudioCurve = canAccess.audioEnergyCurve(userPlan)
@@ -881,7 +890,10 @@ export default function Results() {
                   return (
                     <div key={i} className="flex items-center gap-3"
                       style={{ opacity: 0, animation: `fade-slide-in 0.4s ease-out ${i * 50}ms forwards` }}>
-                      <span className="w-[140px] sm:w-[180px] shrink-0 text-[13px] font-body text-foreground/50 leading-tight">{param.name}</span>
+                      <span className="w-[140px] sm:w-[180px] shrink-0 text-[13px] font-body text-foreground/50 leading-tight">
+                        {param.name}
+                        {param.label && <span className="block text-[10px] text-foreground/30 mt-0.5">{param.label}</span>}
+                      </span>
                       <div className="flex-1 h-2.5 bg-foreground/[0.04] rounded-full overflow-hidden">
                         <div className={`h-full rounded-full ${scoreBarColor(param.score)}`}
                           style={{ width: `${param.score}%`, transition: `width 0.8s ease-out ${i * 50 + 200}ms` }} />
@@ -921,7 +933,10 @@ export default function Results() {
                       return (
                         <div key={`adv-${i}`} className="flex items-center gap-3 opacity-70"
                           style={{ opacity: 0, animation: `fade-slide-in 0.4s ease-out ${(mainParamsSorted.length + i) * 50 + 150}ms forwards` }}>
-                          <span className="w-[140px] sm:w-[180px] shrink-0 text-[13px] font-body text-foreground/50 leading-tight">{param.name}</span>
+                          <span className="w-[140px] sm:w-[180px] shrink-0 text-[13px] font-body text-foreground/50 leading-tight">
+                        {param.name}
+                        {param.label && <span className="block text-[10px] text-foreground/30 mt-0.5">{param.label}</span>}
+                      </span>
                           <div className="flex-1 h-2.5 bg-foreground/[0.04] rounded-full overflow-hidden">
                             <div className={`h-full rounded-full ${scoreBarColor(param.score)}`}
                               style={{ width: `${param.score}%`, transition: `width 0.8s ease-out ${(mainParamsSorted.length + i) * 50 + 350}ms` }} />
@@ -955,6 +970,33 @@ export default function Results() {
                 )}
               </div>
             </div>
+
+            {/* ═══ MODELS USED (new engine results only) ═══ */}
+            {result.studio?.models_used && (
+              <details className="border border-border rounded-2xl px-5 py-3 mb-5">
+                <summary className="cursor-pointer text-[12px] font-semibold tracking-widest uppercase text-foreground/40 font-body">Models used</summary>
+                <ul className="mt-3 space-y-1.5">
+                  {result.studio.models_used.map(m => (
+                    <li key={m.step} className="flex items-baseline justify-between gap-4 text-[12px] font-body">
+                      <span className="text-foreground/50">{m.step}</span>
+                      <span className="text-foreground/35 text-right">
+                        {m.model}
+                        {m.note ? ` · ${m.note}` : ''}
+                        {m.status === 'unavailable' || m.status === 'error' ? ' · not available' : ''}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {result.studio.trends?.status === 'ok' && (result.studio.trends.sources?.length ?? 0) > 0 && (
+                  <p className="mt-3 text-[11px] text-foreground/30 font-body leading-relaxed">
+                    Live trend sources:{' '}
+                    {result.studio.trends.sources!.slice(0, 6).map((src, i) => (
+                      <span key={src.url}>{i > 0 && ', '}<a href={src.url} target="_blank" rel="noopener noreferrer" className="underline">{src.title || 'source'}</a></span>
+                    ))}
+                  </p>
+                )}
+              </details>
+            )}
 
             {/* ═══ ENGAGEMENT PREDICTION (RunPod AI) — Creator+ ═══ */}
             {result.engagementPrediction && result.engagementPrediction.source === 'runpod' && (

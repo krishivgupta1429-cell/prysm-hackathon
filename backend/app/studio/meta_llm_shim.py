@@ -16,7 +16,7 @@ Translation (all measured against the live API):
     image_url data URL. `system` becomes a system message.
   - Spark spends reasoning tokens inside max_tokens (a 30-token budget returned empty content), so the shim adds
     META_REASONING_HEADROOM (default 6000) to every max_tokens and, if a reply still comes back empty because it ran
-    out of budget, retries once with double the headroom. META_REASONING_EFFORT (optional) lowers the reasoning.
+    out of budget, retries once with double the headroom. META_REASONING_EFFORT (optional) lowers the reasoning; streamed chat (ARIA) defaults to low.
   - Images per request: Spark accepted 150 images in one request in our probe (counting accuracy dropped past ~48).
     The original pipeline sends at most 18. META_MAX_IMAGES_PER_REQUEST (default 48) caps a request; beyond it the
     frames are thinned evenly (first and last kept) and a warning is logged, because one answer cannot be stitched
@@ -194,7 +194,9 @@ def build_body(model: str, max_tokens: int | None, messages: list, system, tempe
     body = {"model": model, "messages": build_messages(system, messages)}
     if max_tokens:
         body["max_tokens"] = int(max_tokens) + (reasoning_headroom() if headroom is None else headroom)
-    effort = config.get_env("META_REASONING_EFFORT")
+    # ARIA streams to a person waiting for the first word: it defaults to low reasoning effort (META_CHAT_REASONING_EFFORT)
+    effort = (config.get_env("META_CHAT_REASONING_EFFORT") or config.get_env("META_REASONING_EFFORT") or "low") if stream \
+        else config.get_env("META_REASONING_EFFORT")
     if effort:
         body["reasoning_effort"] = effort
     if temperature is not None:

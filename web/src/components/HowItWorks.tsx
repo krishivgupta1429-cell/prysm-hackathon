@@ -1,8 +1,9 @@
 import { useScrollAnimate } from '@/hooks/useScrollAnimate'
 import { Upload, Cpu, Sparkles } from 'lucide-react'
+import { ALLOW_LINKS } from '@/lib/config'
 
 const steps = [
-  { icon: Upload,   number: '01', title: 'Paste a link or upload',   description: 'Paste any Instagram Reel URL or upload raw footage from your gallery. Prysm downloads the video and extracts frames and audio automatically.', badge: 'Instagram + Upload'  },
+  { icon: Upload,   number: '01', title: ALLOW_LINKS ? 'Paste a link or upload' : 'Upload your reel',   description: ALLOW_LINKS ? 'Paste any Instagram Reel URL or upload raw footage from your gallery. Prysm downloads the video and extracts frames and audio automatically.' : 'Upload raw footage from your gallery. Prysm extracts the frames and audio automatically.', badge: ALLOW_LINKS ? 'Instagram + Upload' : 'Upload'  },
   { icon: Cpu,      number: '02', title: 'Prysm analyzes everything', description: 'Prysm watches every frame, transcribes speech in Hindi & English, analyzes audio quality, and scores your content across 10 parameters — all automatically.', badge: '10 parameters' },
   { icon: Sparkles, number: '03', title: 'Get fixes + captions', description: 'Specific suggestions for every weak parameter, plus AI-generated captions, trending hashtags, and audio recommendations tailored to your niche.',           badge: 'Ready to use'  },
 ]

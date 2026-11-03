@@ -2,17 +2,13 @@
 // relative paths go through Vercel rewrites (see vercel.json).
 export const API_BASE = import.meta.env.VITE_API_URL || ''
 
-const RAILWAY_URL = 'https://YOUR-BACKEND-URL.example.com'
-
 export function apiUrl(path: string): string {
   return `${API_BASE}${path}`
 }
 
-// File uploads go directly to Railway, bypassing Vercel's 4.5 MB serverless body limit.
-// Status polling and all other calls still go through apiUrl (Vercel proxy).
+// File uploads can go directly to the backend (VITE_UPLOAD_URL), bypassing Vercel's 4.5 MB serverless body limit.
+// Status polling and all other calls still go through apiUrl (the host's proxy rewrites).
 export function uploadUrl(path: string): string {
-  if (!import.meta.env.VITE_API_URL) {
-    return `${RAILWAY_URL}${path}`
-  }
-  return `${API_BASE}${path}`
+  const direct = import.meta.env.VITE_UPLOAD_URL || import.meta.env.VITE_API_URL || ''
+  return `${direct}${path}`
 }

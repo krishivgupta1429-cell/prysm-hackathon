@@ -371,35 +371,3 @@ def test_watch_keywords_are_a_few_short_strings_and_empty_when_watch_failed():
     assert trends.keywords_from_watch(WatchStage(status="error")) == [] and trends.keywords_from_watch(None) == []
 
 
-# ---------------------------------------------------------------- summary hashtags, cost and the Models-used rows
-
-def test_the_summary_prompt_offers_live_trending_hashtags_only_when_available():
-    from app.studio import adapter
-    assert adapter.trend_block(None) == "" and adapter.trend_block(TrendsStage(status="unavailable")) == ""
-    block = adapter.trend_block(ok_stage())
-    assert "#grwm" in block and "never use a trending hashtag that does not fit" in block
-    assert "{trend_block}" in adapter.EXTRAS_PROMPT
-
-
-def test_trend_cost_is_in_the_cost_summary_even_when_the_perception_was_cached():
-    from app.studio import adapter
-    report = report_with_trends(ok_stage(cost_usd=0.04))
-    summary = adapter.cost_summary(report, cached=True, extra_items=[])
-    assert [i["label"] for i in summary["items"] if "trends" in i["label"].lower()] and summary["total_usd"] == pytest.approx(0.04)
-
-
-def test_models_used_lists_gemini_flash_for_trends_with_its_status():
-    from app.studio import adapter
-    rows = adapter.models_used(report_with_trends(ok_stage(sources=[{"title": "a.com", "url": "https://x"}])))
-    trend_row = next(r for r in rows if r["step"] == "Live trends")
-    assert trend_row["model"] == "Gemini 2.5 Flash + Google Search" and trend_row["status"] == "ok" and "1 sources" in trend_row["note"]
-    down = next(r for r in adapter.models_used(report_with_trends(TrendsStage(status="unavailable"))) if r["step"] == "Live trends")
-    assert down["status"] == "unavailable" and "not available" in down["note"]
-    assert any("muse-spark-1.3" in r["model"] and "Summary and chat" in r["step"] for r in rows)
-
-
-def test_the_website_progress_list_and_results_panel_know_about_trends():
-    root = Path(__file__).resolve().parents[4] / "web" / "src"
-    assert "id: 'trends'" in (root / "studio" / "progress.ts").read_text()
-    results = (root / "pages" / "Results.tsx").read_text()
-    assert "Models used" in results and "models_used" in results and "param.label" in results

@@ -1,14 +1,17 @@
 import { useState } from 'react'
 import { Menu, X } from 'lucide-react'
 import { isLoggedIn } from '@/lib/auth'
+import { STUDIO_MODE } from '@/lib/config'
 
-const navLinks = [
+const allNavLinks = [
   { label: 'Product',      href: '#product'       },
   { label: 'Features',     href: '#features'      },
   { label: 'How It Works', href: '#how-it-works'  },
   { label: 'Pricing',      href: '#pricing'       },
   { label: 'Resources',    href: '#faq'           },
 ]
+
+const navLinks = STUDIO_MODE ? allNavLinks.filter(l => l.label !== 'Pricing') : allNavLinks
 
 const Navbar = () => {
   const [mobileOpen, setMobileOpen] = useState(false)

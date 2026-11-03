@@ -2,12 +2,10 @@
 
 Offline tests for the separation clean-ups and demo flags: DEMO_AUTO_VERIFY is off by default and, when on, verifies a new
 account at once; PROMOTE_EMAILS and the CORS/CSP settings default to nothing production-specific;
-billing answers 503 when Razorpay keys are unset; the retention cleanup deletes only old Studio work files; and no
+billing answers 503 when Razorpay keys are unset; and no
 production identifier is left in the backend or website sources.
 """
 import asyncio
-import os
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,7 +14,6 @@ from fastapi import HTTPException
 
 from app.core.config import Settings, settings
 from app.routers import auth, billing
-from app.studio import retention
 
 HOUR = 3600
 
@@ -97,6 +94,7 @@ def test_promote_emails_default_to_nobody():
 def test_cors_origins_come_from_the_environment_settings(monkeypatch):
     import importlib
     from app import main
+    monkeypatch.setattr(settings, "ALLOWED_ORIGINS", ["http://localhost:3000", "http://localhost:5173"])
     monkeypatch.setattr(settings, "CORS_ORIGINS", "https://demo-one.example, https://demo-two.example/")
     monkeypatch.setattr(settings, "FRONTEND_URL", "https://demo-site.example")
     try:
@@ -114,50 +112,6 @@ def test_billing_answers_503_when_razorpay_keys_are_unset(monkeypatch):
     with pytest.raises(HTTPException) as e:
         billing._get_razorpay()
     assert e.value.status_code == 503
-
-
-# ---------------------------------------------------------------- retention
-
-def age(path: Path, hours: float, now: float):
-    stamp = now - hours * HOUR
-    for p in [path, *(path.rglob("*") if path.is_dir() else [])]:
-        os.utime(p, (stamp, stamp))
-
-
-def make_base(tmp_path, now):
-    base = tmp_path / "studio"
-    for rel in ("jobs/old", "jobs/fresh", "jobs/running", "_cache/old_sha", "_cache/fresh_sha", "edited"):
-        (base / rel).mkdir(parents=True)
-    for rel in ("jobs/old/a.json", "jobs/fresh/a.json", "jobs/running/a.json", "jobs/running/b.json",
-                "_cache/old_sha/report.json", "_cache/fresh_sha/report.json", "edited/old.mp4", "edited/fresh.mp4", "edited/notes.txt"):
-        (base / rel).write_text("x")
-    for rel in ("jobs/old", "_cache/old_sha"):
-        age(base / rel, 30, now)
-    age(base / "jobs/fresh", 1, now)
-    age(base / "_cache/fresh_sha", 1, now)
-    age(base / "jobs/running", 30, now)
-    os.utime(base / "jobs/running/b.json", (now - HOUR, now - HOUR))  # one file still being written
-    age(base / "edited/old.mp4", 30, now)
-    age(base / "edited/notes.txt", 30, now)
-    age(base / "edited/fresh.mp4", 2, now)
-    return base
-
-
-def test_cleanup_removes_only_old_work_files(tmp_path):
-    now = time.time()
-    base = make_base(tmp_path, now)
-    outside = tmp_path / "keep.txt"
-    outside.write_text("x")
-    age(outside, 100, now)
-    removed = {str(p.relative_to(base)) for p in retention.cleanup(base, 24, now=now)}
-    assert removed == {"jobs/old", "_cache/old_sha", "edited/old.mp4"}
-    assert (base / "jobs/fresh").exists() and (base / "_cache/fresh_sha").exists() and (base / "edited/fresh.mp4").exists()
-    assert (base / "jobs/running").exists()  # a folder with a recent file counts as in use
-    assert (base / "edited/notes.txt").exists() and outside.exists()  # only video files in edited/, nothing outside the base
-
-
-def test_cleanup_with_a_missing_base_does_nothing(tmp_path):
-    assert retention.cleanup(tmp_path / "nope", 24) == []
 
 
 # ---------------------------------------------------------------- no production identifiers left

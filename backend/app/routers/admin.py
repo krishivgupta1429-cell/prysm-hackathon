@@ -16,7 +16,7 @@ from app.models.prysm_analysis import PrysmAnalysis
 
 router = APIRouter()
 
-SHARE_BASE = "https://theprysm.io/share"
+SHARE_BASE = f"{settings.FRONTEND_URL.rstrip('/')}/share"  # the website that serves /share/<id> (FRONTEND_URL)
 
 
 def _require_admin(x_debug_token: str = Header(default="")):

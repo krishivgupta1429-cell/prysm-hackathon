@@ -3,6 +3,8 @@
  * Plans hierarchy: free < pro < plus < creator
  */
 
+import { STUDIO_MODE } from './config'
+
 export type PlanTier = 'free' | 'pro' | 'plus' | 'creator'
 
 const PLAN_RANK: Record<PlanTier, number> = {
@@ -18,6 +20,7 @@ export function getPlanRank(plan: string | undefined): number {
 
 /** True if user plan is at least the required tier */
 export function hasPlan(userPlan: string | undefined, required: PlanTier): boolean {
+  if (STUDIO_MODE) return true // the hackathon demo has no paid tiers: everything is unlocked
   return getPlanRank(userPlan) >= PLAN_RANK[required]
 }
 

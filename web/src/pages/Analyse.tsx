@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { getUser, getToken, fetchUser, clearAuth, type User } from '@/lib/auth'
+import { STUDIO_MODE, ALLOW_LINKS } from '@/lib/config'
 
 export default function Analyse() {
   const navigate = useNavigate()
@@ -16,7 +17,7 @@ export default function Analyse() {
     function onKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (e.key === 'u' || e.key === 'U') navigate('/analyse/upload')
-      if (e.key === 'l' || e.key === 'L') navigate('/analyse/link')
+      if (ALLOW_LINKS && (e.key === 'l' || e.key === 'L')) navigate('/analyse/link')
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -30,7 +31,7 @@ export default function Analyse() {
         <div className="flex items-center gap-2 sm:gap-4">
           {user ? (
             <>
-              <span className="text-xs sm:text-sm text-foreground/40 font-body">{user.credits} credits</span>
+              {!STUDIO_MODE && <span className="text-xs sm:text-sm text-foreground/40 font-body">{user.credits} credits</span>}
               <span className="text-xs sm:text-sm text-foreground/60 font-body hidden sm:inline">{user.username}</span>
               <button
                 onClick={() => { clearAuth(); setUser(null); navigate('/') }}
@@ -88,6 +89,7 @@ export default function Analyse() {
             </div>
           </button>
 
+          {ALLOW_LINKS && (<>
           {/* Link */}
           <button
             onClick={() => navigate('/analyse/link')}
@@ -124,6 +126,7 @@ export default function Analyse() {
               <span className="text-[10px] text-foreground/20 font-body font-medium">L</span>
             </div>
           </button>
+          </>)}
         </div>
 
       </div>

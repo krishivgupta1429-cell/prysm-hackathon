@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { ArrowRight, BarChart3, Sparkles, Zap, MessageSquare, Lightbulb, Search, PenTool } from 'lucide-react'
+import { STUDIO_MODE } from '@/lib/config'
 
 const cycleWords = ['Go Viral', 'Get Views', 'Trend', 'Get Shared']
 
@@ -169,7 +170,7 @@ const Hero = () => {
         <div className="mt-4 sm:mt-7 flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-3 px-2 sm:px-0" style={fade(240)}>
           <a href="/register"
             className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-8 sm:px-10 py-3 sm:py-4 rounded-full bg-foreground text-background font-body font-bold text-[0.875rem] sm:text-base hover:bg-foreground/90 transition-all duration-200 shadow-lg shadow-foreground/10 hover:shadow-xl hover:shadow-foreground/15 hover:-translate-y-0.5">
-            Start for free <ArrowRight className="w-4 h-4" />
+            {STUDIO_MODE ? 'Get started' : 'Start for free'} <ArrowRight className="w-4 h-4" />
           </a>
           <button onClick={() => scrollTo('product')}
             className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 sm:py-4 rounded-full border border-border font-body font-semibold text-[0.875rem] sm:text-[0.9375rem] text-foreground/55 hover:text-foreground hover:border-foreground/25 hover:bg-secondary/40 transition-all duration-200">
@@ -180,9 +181,11 @@ const Hero = () => {
         {/* Trust line */}
         <div className="mt-2 sm:mt-3 flex flex-col items-center gap-1.5" style={fade(300)}>
           <div className="flex items-center gap-2 sm:gap-3 text-[0.6875rem] sm:text-[0.8125rem] text-foreground/35 font-body">
+            {STUDIO_MODE ? <span>Upload a reel, get a full 10-parameter diagnosis</span> : <>
             <span>No credit card required</span>
             <span className="w-px h-3 bg-border" />
             <span>Cancel anytime</span>
+            </>}
           </div>
         </div>
 
@@ -224,7 +227,7 @@ const Hero = () => {
             <div className="flex-1 flex justify-center">
               <div className="h-5 rounded-md bg-background border border-border flex items-center px-3 gap-2 w-32 sm:w-48">
                 <div className="w-1.5 h-1.5 rounded-full bg-foreground/20 flex-shrink-0" />
-                <span className="text-[10px] text-foreground/38 font-body truncate">theprysm.io/results</span>
+                <span className="text-[10px] text-foreground/38 font-body truncate">{window.location.host}/results</span>
               </div>
             </div>
             <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">

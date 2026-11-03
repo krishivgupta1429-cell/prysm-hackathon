@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { setToken, setRefreshToken, fetchUser } from '@/lib/auth'
 import { apiUrl } from '@/lib/api'
+import { STUDIO_MODE } from '@/lib/config'
 
 const VALUE_PROPS = [
   { title: '10-parameter analysis', desc: 'Based on real Instagram ranking signals' },
@@ -114,9 +115,10 @@ export default function Register() {
         <div className="flex-1 flex items-center justify-center px-6">
           <div className="w-full max-w-sm" style={{ opacity: 0, animation: 'fade-slide-in 0.6s ease-out forwards' }}>
             <h1 className="font-display text-3xl font-bold tracking-tight mb-2">Create your account</h1>
-            <p className="text-foreground/40 text-sm mb-8 font-body">Start analysing your content — it's free</p>
+            <p className="text-foreground/40 text-sm mb-8 font-body">{STUDIO_MODE ? 'Start analysing your content' : "Start analysing your content — it's free"}</p>
 
             {/* Google Sign-Up */}
+            {!STUDIO_MODE && (<>
             <button
               type="button"
               onClick={async () => {
@@ -158,6 +160,7 @@ export default function Register() {
               <span className="text-[11px] text-foreground/20 font-body">or sign up with email</span>
               <div className="flex-1 h-px bg-border" />
             </div>
+            </>)}
 
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
               <div>

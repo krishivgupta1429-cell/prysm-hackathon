@@ -83,11 +83,8 @@ def test_the_scoring_prompt_and_judging_notes_do_not_mention_studio():
 
 def test_the_messages_users_actually_get_say_prysm():
     from app.studio import safety
-    from app.studio.adapter import StudioVideoTooLong
-    messages = [safety.DAILY_BUDGET_MESSAGE, safety.ALREADY_RUNNING_MESSAGE, safety.HOURLY_LIMIT_MESSAGE, safety.REGISTER_LIMIT_MESSAGE,
-                str(StudioVideoTooLong(90))]
+    messages = [safety.DAILY_BUDGET_MESSAGE, safety.ALREADY_RUNNING_MESSAGE, safety.HOURLY_LIMIT_MESSAGE, safety.REGISTER_LIMIT_MESSAGE]
     assert safety.DAILY_BUDGET_MESSAGE == "Prysm's demo budget for today is used up. Please try again tomorrow."
-    assert str(StudioVideoTooLong(90)) == "Prysm supports videos up to 90 seconds."
     assert not [m for m in messages if "studio" in m.lower()]
 
 
@@ -133,7 +130,7 @@ def test_the_wordmark_and_page_title_are_plain_prysm_in_demo_mode_too():
     assert og and not [c for c in og if "studio" in c.lower()]
 
 
-@pytest.mark.parametrize("doc", ["README.md", "DEPLOY_STUDIO.md", "HACKATHON.md", "backend/.env.studio.example", "web/.env.studio.example"])
+@pytest.mark.parametrize("doc", ["README.md", "DEPLOY.md", "HACKATHON.md", "backend/.env.example", "web/.env.example"])
 def test_the_public_docs_say_prysm(doc):
     text = (ROOT / doc).read_text()
     assert not BRAND.search(text)

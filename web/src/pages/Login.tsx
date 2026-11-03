@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { setToken, setRefreshToken, fetchUser } from '@/lib/auth'
 import { apiUrl } from '@/lib/api'
+import { STUDIO_MODE } from '@/lib/config'
 
 const VALUE_PROPS = [
   { title: '10-parameter analysis', desc: 'Based on real Instagram ranking signals' },
@@ -105,6 +106,7 @@ export default function Login() {
             <p className="text-foreground/40 text-sm mb-8 font-body">Log in to your Prysm account</p>
 
             {/* Google Sign-In */}
+            {!STUDIO_MODE && (<>
             <button
               type="button"
               onClick={async () => {
@@ -146,6 +148,7 @@ export default function Login() {
               <span className="text-[11px] text-foreground/20 font-body">or continue with email</span>
               <div className="flex-1 h-px bg-border" />
             </div>
+            </>)}
 
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
               <div>

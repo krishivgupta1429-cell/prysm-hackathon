@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiUrl } from '@/lib/api'
 import { getToken, fetchUser } from '@/lib/auth'
 import ReactMarkdown from 'react-markdown'
+import { STUDIO_MODE } from '@/lib/config'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -88,7 +89,7 @@ export default function Chat() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    fetchUser().then(u => { if (u) setUserCredits(u.credits) })
+    fetchUser().then(u => { if (u && !STUDIO_MODE) setUserCredits(u.credits) })
   }, [])
 
   useEffect(() => {
@@ -413,7 +414,7 @@ export default function Chat() {
 
       streamDoneRef.current = true
       // Refresh credit balance after each message
-      fetchUser().then(u => { if (u) setUserCredits(u.credits) })
+      fetchUser().then(u => { if (u && !STUDIO_MODE) setUserCredits(u.credits) })
 
       // If stream completed but no content was received, show error
       if (!fullContentRef.current) {
@@ -433,7 +434,7 @@ export default function Chat() {
       setThinking(false)
       const isOutOfCredits = err?.message === '__out_of_credits__'
       const errMsg = isOutOfCredits
-        ? "You've used up your credits — I can't respond until you top up.\n\n[Upgrade your plan →](https://theprysm.io/pricing)"
+        ? "You've used up your credits — I can't respond until you top up." + (STUDIO_MODE ? '' : "\n\n[Upgrade your plan →](/pricing)")
         : err?.message || 'Sorry, something went wrong. Please try again.'
       setMessages(prev => {
         const updated = [...prev]

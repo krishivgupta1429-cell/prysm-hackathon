@@ -6,6 +6,7 @@ import {
   CheckCircle, Eye, Clock, Layers, PenTool, Type,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
+import { STUDIO_MODE, ALLOW_LINKS } from '@/lib/config'
 
 interface FeatureSection {
   id: string
@@ -60,7 +61,7 @@ const features: FeatureSection[] = [
     headline: 'Decode any viral reel\nin your niche.',
     description: 'Paste the Instagram link of any creator\'s reel — Prysm breaks down exactly what made it work. Same 10 parameters, but framed as techniques you can learn and apply to your own content.',
     bullets: [
-      { icon: Sparkles, text: 'Paste any public Instagram reel link to analyze it' },
+      { icon: Sparkles, text: ALLOW_LINKS ? 'Paste any public Instagram reel link to analyze it' : 'Upload a reel and get the full breakdown' },
       { icon: Eye, text: 'See what techniques drove their virality — hook, pacing, audio, CTA' },
       { icon: Target, text: 'Get actionable takeaways you can apply to your next reel' },
     ],
@@ -127,7 +128,7 @@ const TextContent = ({ feature }: { feature: FeatureSection }) => (
     </div>
     <a href="/register"
       className="inline-flex items-center gap-2 text-[13px] font-body font-semibold text-foreground/60 hover:text-foreground transition-colors duration-200">
-      Try it free <ArrowRight className="w-3.5 h-3.5" />
+      {STUDIO_MODE ? 'Try it' : 'Try it free'} <ArrowRight className="w-3.5 h-3.5" />
     </a>
   </div>
 )

@@ -1,3 +1,5 @@
+import { SUPPORT_EMAIL, STUDIO_MODE } from '@/lib/config'
+
 export default function Privacy() {
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -35,7 +37,7 @@ export default function Privacy() {
             <ul className="space-y-2 list-disc list-inside">
               <li>Provide and improve our AI analysis services</li>
               <li>Process your video uploads and generate insights</li>
-              <li>Manage your subscription and credit balance</li>
+              {!STUDIO_MODE && <li>Manage your subscription and credit balance</li>}
               <li>Communicate with you about our services</li>
               <li>Ensure the security and integrity of our platform</li>
             </ul>
@@ -50,7 +52,7 @@ export default function Privacy() {
             <p>We may share data with trusted third-party service providers who assist us in operating our platform, including:</p>
             <ul className="space-y-2 list-disc list-inside">
               <li>AI processing services for video and audio analysis</li>
-              <li>Payment processors for subscription billing</li>
+              {!STUDIO_MODE && <li>Payment processors for subscription billing</li>}
               <li>Email delivery services for transactional notifications</li>
               <li>Cloud hosting providers for data storage</li>
               <li>Authentication services for secure sign-in</li>
@@ -87,7 +89,7 @@ export default function Privacy() {
               <li>Access your personal information</li>
               <li>Correct inaccurate data via your account settings</li>
               <li>Request deletion of your data by deleting your account</li>
-              <li>Request a data export by emailing <a href="mailto:theprysm77@gmail.com" className="text-foreground/80 underline underline-offset-2 hover:text-foreground transition-colors">theprysm77@gmail.com</a></li>
+              <li>Request a data export by emailing <a href={`mailto:${SUPPORT_EMAIL}`} className="text-foreground/80 underline underline-offset-2 hover:text-foreground transition-colors">{SUPPORT_EMAIL}</a></li>
               <li>Opt out of marketing communications</li>
             </ul>
           </div>
@@ -114,8 +116,8 @@ export default function Privacy() {
           <h2 className="font-display text-xl font-semibold tracking-tight mb-4">9. Contact Us</h2>
           <p className="text-sm text-foreground/60 font-body leading-relaxed">
             If you have any questions about this Privacy Policy, please contact us at{' '}
-            <a href="mailto:theprysm77@gmail.com" className="text-foreground/80 underline underline-offset-2 hover:text-foreground transition-colors">
-              theprysm77@gmail.com
+            <a href={`mailto:${SUPPORT_EMAIL}`} className="text-foreground/80 underline underline-offset-2 hover:text-foreground transition-colors">
+              {SUPPORT_EMAIL}
             </a>
           </p>
         </section>
