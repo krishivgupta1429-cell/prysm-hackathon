@@ -37,6 +37,26 @@ class TimedRedis:
         self.exp[key] = self.clock.now + seconds
         return True
 
+    def pipeline(self):  # the baseline limiter used a pipeline: kept so these tests also reproduce the old behaviour
+        return _Pipe(self)
+
+
+class _Pipe:
+    def __init__(self, redis):
+        self.redis, self.ops = redis, []
+
+    def incr(self, key):
+        self.ops.append(("incr", key, None))
+
+    def expire(self, key, seconds):
+        self.ops.append(("expire", key, seconds))
+
+    async def execute(self):
+        out = []
+        for op, key, arg in self.ops:
+            out.append(await (self.redis.incr(key) if op == "incr" else self.redis.expire(key, arg)))
+        return out
+
 
 @pytest.fixture
 def client(monkeypatch):
