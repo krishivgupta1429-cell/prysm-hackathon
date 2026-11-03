@@ -33,12 +33,9 @@ def _detect_yunet(img) -> list[tuple]:
     return [(float(r[0]), float(r[1]), float(r[2]), float(r[3])) for r in (res if res is not None else [])]
 
 
-def detect_in_image(path: str | Path) -> dict | None:
-    """The largest face in an image as {cx, cy, w, h} (normalised), or None."""
+def _detect_upright(img) -> dict | None:
+    """The largest face of an upright image as normalised {cx, cy, w, h}, or None."""
     import cv2
-    img = cv2.imread(str(path))
-    if img is None:
-        return None
     h, w = img.shape[:2]
     try:
         boxes = _detect_yunet(img)
@@ -54,6 +51,26 @@ def detect_in_image(path: str | Path) -> dict | None:
         return None
     x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
     return {"cx": round((x + fw / 2) / w, 4), "cy": round((y + fh / 2) / h, 4), "w": round(fw / w, 4), "h": round(fh / h, 4)}
+
+
+def detect_in_image(path: str | Path) -> dict | None:
+    """The largest face in an image as {cx, cy, w, h} (normalised), or None. A video recorded sideways (no rotation tag) is handled
+    by also looking at the picture turned 90 degrees either way and mapping the box back."""
+    import cv2
+    img = cv2.imread(str(path))
+    if img is None:
+        return None
+    f = _detect_upright(img)
+    if f:
+        return f
+    cw = _detect_upright(cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE))
+    ccw = _detect_upright(cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE))
+    cands = []
+    if cw:    # clockwise turn: rotated (u, v) -> original x = v, y = 1 - u (normalised); width and height swap
+        cands.append({"cx": cw["cy"], "cy": round(1 - cw["cx"], 4), "w": cw["h"], "h": cw["w"]})
+    if ccw:   # counter-clockwise turn: x = 1 - v, y = u
+        cands.append({"cx": round(1 - ccw["cy"], 4), "cy": ccw["cx"], "w": ccw["h"], "h": ccw["w"]})
+    return max(cands, key=lambda c: c["w"] * c["h"]) if cands else None
 
 
 def sample_faces(video: str | Path, work: str | Path, times: list[float]) -> list[dict]:

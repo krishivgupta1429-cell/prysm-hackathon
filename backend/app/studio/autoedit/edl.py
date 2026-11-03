@@ -7,6 +7,7 @@ The same `validate_edl` checks planner output, revisions and toggles. Per-op pro
 problems with the plan as a whole (too many ops, too much removed, result too long) are returned as `errors` so the planner can
 be asked once more.
 """
+import re
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field, field_validator
@@ -26,6 +27,7 @@ DEFAULT_TARGET = {"hook": "Hook & Opening", "pacing": "Retention & Pacing", "zoo
 TEXT_LIMITS = {"hook": 42, "label": 36, "cta": 48}
 MAX_HOOK_WORDS = 8
 REMOVING = ("trim", "cut_segment", "remove_filler")
+TIME_IN_TEXT = re.compile(r"\b\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds)\b|\bat \d+(?::\d+)?\b", re.I)
 
 
 class Op(BaseModel):
@@ -142,6 +144,8 @@ def _check_text(text, role: str) -> str:
     if not isinstance(text, str) or not text.strip():
         raise ValueError("text is empty")
     text = " ".join(text.split())
+    if TIME_IN_TEXT.search(text):
+        raise ValueError("on-screen text must not mention timestamps or seconds")
     limit = TEXT_LIMITS.get(role, 36)
     if len(text) > limit:
         raise ValueError(f"text is {len(text)} characters (limit {limit} for a {role})")
@@ -324,6 +328,17 @@ def validate_edl(raw: dict | EDL, inp: Inputs, style_overrides: dict | None = No
             dropped.append({"op": z.model_dump(), "reason": f"zoom punches must be {config.ZOOM_MIN_GAP_S} s apart"})
         else:
             last = z.params["at"]
+
+    # only one text overlay on screen at a time (keep the earlier one; the later becomes a manual tip)
+    ovs = sorted((o for o in kept if o.type == "text_overlay"), key=lambda o: (o.params["start"], o.params["end"]))
+    cur_end = -1.0
+    for o in ovs:
+        if o.params["start"] < cur_end - 1e-6:
+            kept.remove(o)
+            dropped.append({"op": o.model_dump(), "reason": "overlaps another text overlay on screen"})
+            tips.append(Tip(step_id=o.source_step_id, parameter=o.target_parameter, tip=o.reason or "text overlay", why_manual="not applied: two texts would be on screen at once"))
+        else:
+            cur_end = max(cur_end, o.params["end"])
 
     # removals must not overlap each other (keep the first)
     removers = sorted((o for o in kept if o.type in REMOVING and o.type != "trim"), key=lambda o: o.params["start"])

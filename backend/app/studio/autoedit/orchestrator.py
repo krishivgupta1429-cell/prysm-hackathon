@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.studio.autoedit import config, captions, ffx, verify, planner, faces as facesmod, ducking
-from app.studio.autoedit import executor, inputs as inputs_mod
+from app.studio.autoedit import cover as cover_mod, executor, inputs as inputs_mod
 from app.studio.autoedit.edl import EDL, GROUPS, DEFAULT_TARGET, Op, validate_edl, ops_by_group
 from app.studio.autoedit.llm import CostMeter, CostCapExceeded, EditLLM
 from app.studio.autoedit.presets import resolve_style
@@ -329,6 +329,11 @@ class Runner:
         if rr.caption_words or rr.overlays:
             self.storage.put_bytes(edit_prefix(self.aid) + "captions.ass", ass_text.encode("utf-8"), "text/plain")
         self.storage.put_bytes(edit_prefix(self.aid) + "edl.json", edl.model_dump_json(indent=2).encode(), "application/json")
+        try:
+            cov = cover_mod.make(final_path, edl, rr.timeline, self.analysis, self.work / "cover", self.work / "cover.jpg")
+            self.storage.put_file(edit_prefix(self.aid) + "cover.jpg", cov, "image/jpeg")
+        except Exception as e:  # a cover is a nicety
+            log.info("[AutoEdit] cover not made: %s", e)
         overall = None
         if any_kept and base_path is not None and not partial:
             try:

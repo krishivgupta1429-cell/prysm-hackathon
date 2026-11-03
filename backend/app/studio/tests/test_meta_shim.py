@@ -235,4 +235,4 @@ def test_defaults_keep_the_baseline_behaviour():
     from app.core.config import Settings
     f = Settings.model_fields
     assert f["AI_PROVIDER"].default == "" and f["STUDIO_UNLIMITED"].default is False and f["DEMO_AUTO_VERIFY"].default is False
-    assert f["AUTO_EDIT_ENABLED"].default is True and f["STUDIO_ALLOW_LINKS"].default is True
+    assert f["AUTO_EDIT_ENABLED"].default is False and f["STUDIO_ALLOW_LINKS"].default is True  # Auto-edit is off by default (hackathon requirement; the baseline default was on)

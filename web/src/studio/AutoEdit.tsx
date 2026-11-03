@@ -156,6 +156,7 @@ export default function AutoEdit({ analysisId }: { analysisId?: string }) {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
           <button style={btn} onClick={() => download('mp4', 'prysm-edit.mp4')}>Download MP4</button>
           {st.final?.has_captions && <><button style={btn2} onClick={() => download('srt', 'captions.srt')}>Captions (SRT)</button><button style={btn2} onClick={() => download('ass', 'captions.ass')}>Captions (ASS)</button></>}
+          <button style={btn2} onClick={() => download('cover', 'cover.jpg')}>Cover image</button>
           <button style={btn2} onClick={() => download('edl', 'edit-list.json')}>Edit list (JSON)</button>
         </div>
 
@@ -203,6 +204,7 @@ export default function AutoEdit({ analysisId }: { analysisId?: string }) {
         </div>
         {overall && (
           <div style={{ overflowX: 'auto', marginTop: 12 }}>
+            <p style={{ ...muted, margin: '0 0 6px' }}>This estimate is noisy (a few points up or down, sometimes more). A change in a parameter the edit did not touch is estimator noise, not an effect of the edit.</p>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 420 }}>
               <thead><tr style={{ textAlign: 'left', color: '#737373' }}><th style={{ padding: '6px 4px' }}>Parameter (AI-estimated)</th><th>Before</th><th>After</th><th>Change</th></tr></thead>
               <tbody>
@@ -226,9 +228,12 @@ export default function AutoEdit({ analysisId }: { analysisId?: string }) {
 
         {st.manual_tips.length > 0 && <>
           <h3 style={h3}>Do these yourself</h3>
-          <ul style={{ margin: 0, paddingLeft: 18 }}>
-            {st.manual_tips.map((t, i) => <li key={i} style={{ fontSize: 12, lineHeight: 1.5, color: '#525252', marginBottom: 4 }}>{t.tip}{t.why_manual ? <span style={{ color: '#a3a3a3' }}> ({t.why_manual})</span> : null}</li>)}
-          </ul>
+          {(() => { const li = (t: Tip, i: number) => <li key={i} style={{ fontSize: 12, lineHeight: 1.5, color: '#525252', marginBottom: 4 }}>{t.tip}{t.why_manual ? <span style={{ color: '#a3a3a3' }}> ({t.why_manual})</span> : null}</li>
+            return <>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>{st.manual_tips.slice(0, 6).map(li)}</ul>
+              {st.manual_tips.length > 6 && <details><summary style={{ ...muted, cursor: 'pointer', fontWeight: 600, marginTop: 6 }}>{st.manual_tips.length - 6} more</summary><ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{st.manual_tips.slice(6).map((t, i) => li(t, i + 6))}</ul></details>}
+            </>
+          })()}
         </>}
       </>}
     </div>

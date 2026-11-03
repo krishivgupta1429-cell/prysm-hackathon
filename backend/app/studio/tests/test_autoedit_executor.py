@@ -231,3 +231,16 @@ def test_dissolve_transition_joins_jump_cuts_and_keeps_audio_and_video_in_sync(t
     join = soft.timeline.segments[1].out_start
     mid_s, mid_h = frame_gray(out_s, join - 0.06).astype(int), frame_gray(out_h, join - 0.06).astype(int)
     assert np.abs(mid_s - mid_h).mean() > 0.3                              # a blended frame sits where the hard cut would be a single picture
+
+
+def test_cover_is_a_real_frame_with_the_hook_text(tmp_path, clip):
+    from app.studio.autoedit import cover
+    edl, inp = build([op(1, "text_overlay", "hook", text="Wait for the reveal", role="hook", anchor="output", end=2.8, position="top")])
+    out = tmp_path / "o.mp4"
+    rr = X.render(edl, inp, clip, out, tmp_path / "w", GROUPS)
+    jpg = cover.make(out, edl, rr.timeline, {"visionData": {"bestThumbnailFrame": 3.0}}, tmp_path / "c", tmp_path / "cover.jpg")
+    assert jpg.exists() and jpg.stat().st_size > 5000
+    info = ffx.probe(jpg)
+    assert (info["width"], info["height"]) == (1080, 1920)
+    assert cover.pick_time({"visionData": {"bestThumbnailFrame": 3.0}}, rr.timeline, rr.duration) == pytest.approx(3.0, abs=0.05)
+    assert cover.pick_time({}, rr.timeline, rr.duration) == 1.0

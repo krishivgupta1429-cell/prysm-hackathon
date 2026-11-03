@@ -38,8 +38,9 @@ def test_times_outside_the_video_are_refused():
 
 
 def test_more_than_14_ops_is_a_plan_level_error():
-    ops = [op(i, "text_overlay", "text", text=f"label {i}", role="label", anchor="source", start=2.0, end=3.0, position="top") for i in range(16)]
-    v = validate(ops)
+    inp = make_inputs(duration=80.0, scene_cuts=[float(t) for t in range(0, 80)], silences=[], words=[], segments=[], energy_peaks=[], analysis_times=[], fillers=[])
+    ops = [op(i, "text_overlay", "text", text=f"label {i}", role="label", anchor="source", start=float(3 * i + 2), end=float(3 * i + 3), position="top") for i in range(16)]
+    v = validate(ops, inp)
     assert any("operations; the limit is 14" in e for e in v.errors)
 
 
@@ -138,3 +139,35 @@ def test_music_driven_reels_cut_on_the_beat_within_120_ms():
                       scene_cuts=[round(beats[8] + 0.06, 2), round(beats[14] - 0.05, 2)], silences=[], energy_peaks=[], analysis_times=[])
     v = E.validate_edl({"ops": [{"id": "o1", "type": "cut_segment", "group": "pacing", "params": {"start": round(beats[8] + 0.06, 2), "end": round(beats[14] - 0.05, 2)}}]}, inp)
     assert v.edl.ops[0].params["start"] == beats[8] and v.edl.ops[0].params["end"] == beats[14]
+
+
+def test_text_may_not_mention_timestamps_and_overlays_may_not_overlap():
+    v = validate([op(1, "text_overlay", "hook", text="wait for the white look at 9s", role="hook", anchor="output", end=2.8)])
+    assert v.edl.ops == [] and "timestamps" in v.dropped[0]["reason"]
+    v = validate([op(1, "text_overlay", "hook", text="Wait for it", role="hook", anchor="output", end=2.8),
+                  op(2, "text_overlay", "text", text="Another label", role="label", anchor="source", start=2.0, end=3.0)])
+    assert [o.id for o in v.edl.ops] == ["o1"] and "overlaps another text overlay" in v.dropped[0]["reason"]
+    v = validate([op(1, "text_overlay", "hook", text="Wait for it", role="hook", anchor="output", end=2.8),
+                  op(2, "text_overlay", "text", text="Later label", role="label", anchor="source", start=3.3, end=4.4)])
+    assert len(v.edl.ops) == 2
+
+
+def test_a_face_in_a_sideways_video_is_found_and_mapped_back(tmp_path):
+    import cv2, numpy as np
+    from app.studio.autoedit import faces
+    from app.studio.autoedit.faces import MODEL
+    assert MODEL.exists()
+    # no real face image is bundled, so check the rotation mapping with a fake detector: a face at the top-right of the turned picture
+    calls = []
+    def fake(img):
+        calls.append(img.shape)
+        return {"cx": 0.8, "cy": 0.2, "w": 0.1, "h": 0.3} if len(calls) == 2 else None   # found only in the clockwise-turned copy
+    orig = faces._detect_upright
+    faces._detect_upright = fake
+    try:
+        p = tmp_path / "a.jpg"
+        cv2.imwrite(str(p), np.zeros((200, 100, 3), dtype=np.uint8))
+        f = faces.detect_in_image(p)
+    finally:
+        faces._detect_upright = orig
+    assert f == {"cx": 0.2, "cy": 0.2, "w": 0.3, "h": 0.1}   # x = v, y = 1 - u after turning back; box width and height swap

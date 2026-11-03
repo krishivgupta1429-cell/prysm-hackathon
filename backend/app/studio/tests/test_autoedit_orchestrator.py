@@ -173,6 +173,9 @@ ANALYSIS = {"niche": "Fashion", "overallScore": 61, "parameters": [
     {"name": "Audio & Music", "score": 50, "howToDoIt": "Step 1 — Normalise the voice loudness before posting."}]}
 
 
+BIG = make_inputs(duration=80.0, scene_cuts=[float(t) for t in range(0, 80)], silences=[], words=[], segments=[], energy_peaks=[], analysis_times=[], fillers=[])
+
+
 def test_steps_get_ids_and_timestamps_are_harvested():
     steps = planner.extract_steps(ANALYSIS)
     assert [s["id"] for s in steps] == ["hook#1", "hook#2", "audio#1"]
@@ -181,17 +184,17 @@ def test_steps_get_ids_and_timestamps_are_harvested():
 
 
 def test_the_planner_retries_once_with_the_errors_and_then_accepts():
-    too_many = {"ops": [{"id": f"o{i}", "type": "text_overlay", "group": "text", "params": {"text": f"t{i}", "role": "label", "anchor": "source", "start": 2.0, "end": 3.0, "position": "top"}} for i in range(16)]}
+    too_many = {"ops": [{"id": f"o{i}", "type": "text_overlay", "group": "text", "params": {"text": f"t{i}", "role": "label", "anchor": "source", "start": float(3 * i + 2), "end": float(3 * i + 3), "position": "top"}} for i in range(16)]}
     fine = {"ops": [{"id": "o1", "type": "loudnorm", "group": "audio", "source_step_id": "audio#1", "reason": "x", "params": {}}],
             "manual_tips": [{"step_id": "hook#2", "parameter": "Hook & Opening", "tip": "reshoot", "why_manual": "needs a reshoot"}]}
     llm = FakeLLM([too_many, fine])
-    res = planner.plan(ANALYSIS, make_inputs(), llm, "clean")
+    res = planner.plan(ANALYSIS, BIG, llm, "clean")
     assert res.attempts == 2 and "16 operations; the limit is 14" in llm.prompts[1] and len(res.edl.ops) == 1 and res.edl.manual_tips[0].tip == "reshoot"
 
 
 def test_after_two_bad_plans_the_extra_ops_are_trimmed_so_a_plan_always_comes_out():
-    too_many = {"ops": [{"id": f"o{i}", "type": "text_overlay", "group": "text", "params": {"text": f"t{i}", "role": "label", "anchor": "source", "start": 2.0, "end": 3.0, "position": "top"}} for i in range(16)]}
-    res = planner.plan(ANALYSIS, make_inputs(), FakeLLM([too_many, too_many]), "clean")
+    too_many = {"ops": [{"id": f"o{i}", "type": "text_overlay", "group": "text", "params": {"text": f"t{i}", "role": "label", "anchor": "source", "start": float(3 * i + 2), "end": float(3 * i + 3), "position": "top"}} for i in range(16)]}
+    res = planner.plan(ANALYSIS, BIG, FakeLLM([too_many, too_many]), "clean")
     assert len(res.edl.ops) <= 14 and res.validation.ok and res.notes
 
 

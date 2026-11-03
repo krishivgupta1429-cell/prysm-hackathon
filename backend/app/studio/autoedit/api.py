@@ -38,7 +38,7 @@ _LIVE: dict[str, dict] = {}          # analysis_id -> the state of an edit runni
 _TASKS: set = set()                  # keeps background tasks alive
 LOCK_TTL_S = 1800
 DOWNLOADS = {"mp4": ("final.mp4", "video/mp4", "mp4"), "srt": ("captions.srt", "text/plain", "srt"), "ass": ("captions.ass", "text/plain", "ass"),
-             "edl": ("edl.json", "application/json", "json")}
+             "edl": ("edl.json", "application/json", "json"), "cover": ("cover.jpg", "image/jpeg", "jpg")}
 
 
 # ------------------------------------------------------------------ helpers
