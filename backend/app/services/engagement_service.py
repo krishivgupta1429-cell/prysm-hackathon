@@ -13,6 +13,10 @@ Deployment: RunPod serverless endpoint (called via HTTP).
 
 Fallback: if RunPod endpoint not configured, computes a heuristic score from
 the signals we already have (vision score, audio energy, aesthetic score).
+
+Hackathon change (see HACKATHON.md): ENGAGEMENT_BACKEND = modal | runpod | heuristic picks the backend
+(app/studio/engagement_modal.py runs Qwen2.5-VL zero-shot and Q-Align on Modal). Every result now carries
+"available"; a failure returns available=False with a reason and NEVER invented numbers.
 """
 
 import asyncio
@@ -52,6 +56,13 @@ async def predict_engagement(
         }
     """
     from app.core.config import settings
+    from app.studio import engagement_modal
+
+    choice = engagement_modal.backend_choice()
+    if choice == "modal":
+        return await _predict_modal(frames, niche, duration)
+    if choice == "heuristic":
+        return _heuristic_engagement(vision_data, energy_data, aesthetics_data, niche)
 
     runpod_endpoint = settings.RUNPOD_ENGAGEMENT_ENDPOINT
     runpod_key = settings.RUNPOD_API_KEY
@@ -68,6 +79,28 @@ async def predict_engagement(
 
     # Heuristic fallback — derives NAWP/ECR from signals already computed
     return _heuristic_engagement(vision_data, energy_data, aesthetics_data, niche)
+
+
+def _unavailable(source: str, reason: str) -> Dict[str, Any]:
+    """No prediction. Carries the reason; has no numbers at all (the old worker's 40/55 fallback is not reproduced)."""
+    return {"available": False, "reason": reason, "source": source, "nawp": None, "ecr": None,
+            "hook_risk": None, "retention_risk": None, "qalign": None, "interpretation": ""}
+
+
+async def _predict_modal(frames: List[Dict], niche: str, duration: float) -> Dict[str, Any]:
+    from app.studio import engagement_modal
+    try:
+        res = await asyncio.to_thread(engagement_modal.predict, frames, niche, duration)
+    except engagement_modal.EngagementUnavailable as e:
+        logger.warning(f"[Engagement] unavailable: {e}")
+        return _unavailable("qwen_zero_shot", str(e))
+    except Exception as e:
+        logger.warning(f"[Engagement] Modal call failed: {type(e).__name__}")
+        return _unavailable("qwen_zero_shot", f"the prediction service could not be reached ({type(e).__name__})")
+    out = _build_result(res["nawp"], res["ecr"], source=res["source"])
+    out["qalign"] = res.get("qalign")
+    out["_modal_cost_usd"] = res["call"]["est_cost_usd"]  # popped by the caller for the cost breakdown
+    return out
 
 
 async def _call_runpod(
@@ -199,8 +232,8 @@ def _heuristic_engagement(
         score_components.append(("aesthetics", aes_score, 0.30))
 
     if not score_components:
-        # Nothing to go on — return neutral estimate
-        return _build_result(45.0, 55.0, source="heuristic")
+        # Nothing to go on — no invented neutral numbers (hackathon change; the baseline returned 45 / 55)
+        return _unavailable("heuristic", "no signals were available to estimate from")
 
     total_weight = sum(w for _, _, w in score_components)
     composite = sum(v * w for _, v, w in score_components) / total_weight
@@ -247,6 +280,8 @@ def _build_result(nawp: float, ecr: float, source: str) -> Dict[str, Any]:
         lines.append(f"Retention is STRONG — predicted average watch percentage is {nawp:.0f}%.")
 
     return {
+        "available": True,
+        "qalign": None,
         "nawp": nawp,
         "ecr": ecr,
         "hook_risk": hook_risk,
@@ -258,7 +293,7 @@ def _build_result(nawp: float, ecr: float, source: str) -> Dict[str, Any]:
 
 def build_engagement_context(engagement: Dict[str, Any]) -> str:
     """Format engagement signals into a Claude-readable context string."""
-    if not engagement:
+    if not engagement or engagement.get("available") is False:
         return ""
 
     nawp = engagement.get("nawp", 0)
@@ -271,6 +306,14 @@ def build_engagement_context(engagement: Dict[str, Any]) -> str:
         label = "Qwen2.5-VL-7B model (AI prediction)"
         confidence_note = "These are AI-predicted estimates based on visual frame analysis — not measured viewer data, but significantly more reliable than heuristics."
         pct_instruction = "You MAY reference these percentages as AI-predicted estimates (e.g. 'the model predicts ~{ecr:.0f}% hook hold rate'). Always clarify they are predictions, not measured stats."
+    elif source == "evqa":
+        label = "LMM-EVQA (trained on short-form watch data)"
+        confidence_note = "These are model-predicted estimates, not measured viewer data."
+        pct_instruction = "You MAY reference these percentages as AI-predicted estimates. Always clarify they are predictions, not measured stats."
+    elif source == "qwen_zero_shot":
+        label = "a general vision-language model's rough guess from the frames (not trained on watch data)"
+        confidence_note = "This is a rough guess from frame content, not measured and not trained on watch data — wide error margin, not reliable enough to quote as specific numbers."
+        pct_instruction = "Do NOT quote the specific percentages — use only the risk level (low/medium/high) to inform your advice, as a soft hint."
     else:
         label = "heuristic signal analysis"
         confidence_note = "These are rough directional estimates from audio/visual signals — wide error margin, not reliable enough to quote as specific numbers."
@@ -288,5 +331,13 @@ def build_engagement_context(engagement: Dict[str, Any]) -> str:
         ctx += "\n- Pacing and mid-section energy need work to hold viewers through."
 
     ctx += f"\nINSTRUCTION: {pct_instruction.format(ecr=ecr, nawp=nawp)}"
+
+    # Q-Align visual quality: evidence for scoring only behind a flag (default off). Never a watch percentage.
+    qa = engagement.get("qalign")
+    if qa:
+        from app.studio import engagement_modal
+        if engagement_modal.qalign_for_scoring_enabled():
+            ctx += (f"\nVISUAL QUALITY SIGNAL (Q-Align, picture quality only, not viewer behaviour): "
+                    f"quality {qa['quality']:.1f}/5 ({qa['band']}), aesthetics {qa['aesthetic']:.1f}/5.")
 
     return ctx
