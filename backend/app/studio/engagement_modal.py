@@ -27,8 +27,10 @@ QALIGN_CLASS = "QAlign"
 MAX_FRAMES = 8
 # Q-Align's native scale is 1 to 5 (bad, poor, fair, good, excellent); the band is the nearest level.
 QALIGN_BANDS = ((1.5, "Bad"), (2.5, "Poor"), (3.5, "Fair"), (4.5, "Good"), (5.01, "Excellent"))
-# APPROXIMATE Modal L4 price per GPU second (modal.com/pricing); ENGAGEMENT_USD_PER_GPU_SECOND overrides it.
-DEFAULT_USD_PER_GPU_SECOND = 0.000222
+# APPROXIMATE Modal prices per GPU second (`modal billing rates`, $/hour / 3600); ENGAGEMENT_USD_PER_GPU_SECOND
+# overrides them all. The rate follows the GPU the container reported (the app falls back L4 -> A10G / T4).
+GPU_USD_PER_SECOND = {"L4": 0.000222, "A10G": 0.000306, "T4": 0.000164}
+DEFAULT_USD_PER_GPU_SECOND = GPU_USD_PER_SECOND["L4"]
 CALL_TIMEOUT_S = float(os.environ.get("ENGAGEMENT_CALL_TIMEOUT_S", "420"))  # includes a possible cold start
 
 
@@ -58,7 +60,7 @@ def qalign_band(score: float) -> str:
     return "Excellent"
 
 
-def usd_per_gpu_second() -> float:
+def usd_per_gpu_second(gpu_name: str | None = None) -> float:
     for name in ("ENGAGEMENT_USD_PER_GPU_SECOND", "MODAL_USD_PER_GPU_SECOND"):
         raw = config.get_env(name)
         if raw:
@@ -66,6 +68,10 @@ def usd_per_gpu_second() -> float:
                 return float(raw)
             except ValueError:
                 pass
+    upper = (gpu_name or "").upper()
+    for key, price in GPU_USD_PER_SECOND.items():
+        if key in upper:
+            return price
     return DEFAULT_USD_PER_GPU_SECOND
 
 
@@ -99,7 +105,7 @@ def _remote(cls_name: str, method: str, **kwargs):
 
 
 def _cost(res: dict | None) -> float:
-    return round(float((res or {}).get("gpu_seconds") or 0.0) * usd_per_gpu_second(), 6)
+    return round(float((res or {}).get("gpu_seconds") or 0.0) * usd_per_gpu_second((res or {}).get("gpu")), 6)
 
 
 def predict(frames: list, niche: str, duration: float, caller=_remote) -> dict:
@@ -131,10 +137,11 @@ def predict(frames: list, niche: str, duration: float, caller=_remote) -> dict:
     cost = round(_cost(qwen) + _cost(qa), 6)
     call = {"backend": "modal", "latency_s": latency, "cold": bool((qwen or {}).get("cold") or (qa or {}).get("cold")),
             "qwen_cold": (qwen or {}).get("cold"), "qalign_cold": (qa or {}).get("cold"),
-            "gpu_seconds": round(gpu_s, 2), "est_cost_usd": cost, "gpu": (qwen or qa or {}).get("gpu"),
+            "gpu_seconds": round(gpu_s, 2), "est_cost_usd": cost, "gpu": (qwen or qa or {}).get("gpu"), "qalign_gpu": (qa or {}).get("gpu"),
             "qalign_error": qa_err, "qwen_error": qwen_err}
-    logger.info("[Engagement] backend=modal latency=%.1fs %s gpu_seconds=%.1f est_cost=$%.4f (estimate at $%.6f/GPU-s) "
-                "qwen=%s qalign=%s", latency, "cold" if call["cold"] else "warm", gpu_s, cost, usd_per_gpu_second(),
+    logger.info("[Engagement] backend=modal latency=%.1fs %s gpu_seconds=%.1f est_cost=$%.4f (estimate, %s / %s) "
+                "qwen=%s qalign=%s", latency, "cold" if call["cold"] else "warm", gpu_s, cost,
+                (qwen or {}).get("gpu"), (qa or {}).get("gpu"),
                 "ok" if qwen else "FAILED", "ok" if qa else "failed")
     if qwen is None:
         raise EngagementUnavailable(f"the prediction model did not answer ({qwen_err})")

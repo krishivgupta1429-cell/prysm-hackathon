@@ -60,6 +60,10 @@ qalign_image = (
     .env({"HF_HOME": f"{CACHE_DIR}/hf", "TOKENIZERS_PARALLELISM": "false", "HF_HUB_DISABLE_TELEMETRY": "1"})
 )
 
+# GPU preference lists (first available wins). Qwen2.5-VL-7B in bf16 needs a 24 GB card; Q-Align in fp16 fits a 16 GB T4.
+QWEN_GPUS = ["L4", "A10G"]
+QALIGN_GPUS = ["L4", "T4", "A10G"]
+
 _COMMON = dict(volumes={CACHE_DIR: volume}, scaledown_window=SCALEDOWN_S, min_containers=MIN_CONTAINERS)
 
 # ---------------------------------------------------------------- the Qwen prompt (port of the RunPod handler)
@@ -129,7 +133,7 @@ def _decode_frames(frames_in: list) -> list:
 
 # ---------------------------------------------------------------- Qwen2.5-VL zero-shot
 
-@app.cls(image=qwen_image, gpu="L4", timeout=600, **_COMMON)
+@app.cls(image=qwen_image, gpu=QWEN_GPUS, timeout=600, **_COMMON)
 class QwenZeroShot:
     @modal.enter()
     def boot(self):
@@ -175,7 +179,7 @@ class QwenZeroShot:
 
 # ---------------------------------------------------------------- Q-Align (one-align)
 
-@app.cls(image=qalign_image, gpu="L4", timeout=600, **_COMMON)
+@app.cls(image=qalign_image, gpu=QALIGN_GPUS, timeout=600, **_COMMON)
 class QAlign:
     @modal.enter()
     def boot(self):
