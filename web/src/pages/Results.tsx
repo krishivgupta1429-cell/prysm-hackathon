@@ -12,6 +12,7 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { STUDIO_MODE } from '@/lib/config'
 import CostPanel from '@/studio/CostPanel'
+import AutoEdit from '@/studio/AutoEdit'
 import { parseMarkedSteps } from '@/studio/steps'
 import ViewerBehaviourCard from '@/studio/ViewerBehaviourCard'
 
@@ -981,6 +982,9 @@ export default function Results({ injected }: { injected?: Record<string, unknow
 
             {/* ═══ COST BREAKDOWN (local flag or founder only; renders nothing otherwise) ═══ */}
             <CostPanel analysisId={result.analysis_id} />
+
+            {/* ═══ AUTO-EDIT (hackathon; renders nothing unless the backend flag is on and the analysis came from an upload) ═══ */}
+            {isUpload && <AutoEdit analysisId={result.analysis_id} />}
 
             {/* ═══ MODELS USED ═══ */}
             {result.modelsUsed && result.modelsUsed.length > 0 && (

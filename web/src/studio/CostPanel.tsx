@@ -31,6 +31,7 @@ export function canShowCostPanel(): boolean {
 
 export default function CostPanel({ analysisId }: { analysisId?: string }) {
   const [data, setData] = useState<Breakdown | null>(null)
+  const [edit, setEdit] = useState<{ cost?: { total_usd: number; by_service?: Record<string, { usd: number; calls: number; seconds: number }> }; timing?: { total_s?: number; render_s?: number }; ops?: number; revisions?: number } | null>(null)
   const allowed = canShowCostPanel()
 
   useEffect(() => {
@@ -40,6 +41,9 @@ export default function CostPanel({ analysisId }: { analysisId?: string }) {
       .then(r => (r.ok ? r.json() : null))
       .then(d => setData(d?.cost?.breakdown ?? null))
       .catch(() => setData(null))
+    // Auto-edit cost (404 unless the flag is on and an edit exists)
+    fetch(apiUrl(`/prysm/auto-edit/${analysisId}/cost`), { headers: { Authorization: `Bearer ${tk}` } })
+      .then(r => (r.ok ? r.json() : null)).then(setEdit).catch(() => setEdit(null))
   }, [allowed, analysisId])
 
   if (!allowed || !data) return null
@@ -57,6 +61,10 @@ export default function CostPanel({ analysisId }: { analysisId?: string }) {
   if (data.gemini?.trends?.called) rows.push(['Gemini trends', 'not metered', 'n/a'])
   if (data.modal_gpu) rows.push([`Modal GPU (estimate)${data.modal_gpu.gpu ? ' · ' + data.modal_gpu.gpu : ''}`, `${data.modal_gpu.gpu_seconds}s × ${data.modal_gpu.rate_usd_per_s ?? '?'}/s`, usd(data.modal_gpu.cost_usd)])
   if (data.acrcloud) rows.push(['ACRCloud', data.acrcloud.called ? (data.acrcloud.matched ? 'called · matched' : 'called · no match') : 'not called', 'per-call'])
+  if (edit?.cost) {
+    for (const [svc, v] of Object.entries(edit.cost.by_service || {})) rows.push([`Auto-edit · ${svc}`, `${v.calls} call${v.calls === 1 ? '' : 's'} · ${Math.round(v.seconds)}s`, usd(v.usd)])
+    rows.push(['Auto-edit total', `${edit.ops ?? 0} changes · ${edit.revisions ?? 0} revisions · ${Math.round(edit.timing?.total_s ?? 0)}s`, usd(edit.cost.total_usd)])
+  }
   if (data.apify) rows.push(['Apify', data.apify.called ? 'called' : 'not called', data.apify.called ? usd(data.apify.cost_usd) : '-'])
 
   return (
