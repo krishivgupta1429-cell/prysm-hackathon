@@ -22,3 +22,6 @@ backend/scripts/niche_research/*
 !backend/scripts/niche_research/*.py
 !backend/scripts/niche_research/*.md
 backend/scripts/db_audit/*.md
+
+# Hackathon: Auto-edit local storage and render work files
+backend/data/
