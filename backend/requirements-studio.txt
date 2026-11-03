@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+openai
+httpx
+python-multipart
+python-dotenv
+modal
+pytest
+pydantic
+librosa
+numpy
+google-genai
