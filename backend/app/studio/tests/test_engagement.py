@@ -146,7 +146,18 @@ def test_context_is_empty_when_unavailable():
 
 # ---------------------------------------------------------------- scoring evidence
 
-def test_qwen_zero_shot_context_does_not_invite_quoting_percentages():
+def test_qwen_zero_shot_stays_out_of_scoring_by_default(env):
+    res = svc._build_result(30.0, 40.0, "qwen_zero_shot")
+    res["qalign"] = {"quality": 3.8, "aesthetic": 2.9, "band": "Good"}
+    env()
+    assert svc.build_engagement_context(res) == ""
+    env(engagement_qalign_evidence="1")  # the Q-Align flag works on its own; the zero-shot ECR/NAWP is still not handed over
+    ctx = svc.build_engagement_context(res)
+    assert "Q-Align" in ctx and "ECR" not in ctx and "NAWP" not in ctx
+
+
+def test_qwen_zero_shot_context_does_not_invite_quoting_percentages(env):
+    env(engagement_zeroshot_evidence="1")
     res = svc._build_result(30.0, 40.0, "qwen_zero_shot")
     ctx = svc.build_engagement_context(res)
     assert "Do NOT quote the specific percentages" in ctx and "not trained on watch data" in ctx
@@ -155,9 +166,9 @@ def test_qwen_zero_shot_context_does_not_invite_quoting_percentages():
 def test_qalign_in_scoring_only_behind_flag(env):
     res = svc._build_result(50.0, 60.0, "qwen_zero_shot")
     res["qalign"] = {"quality": 3.8, "aesthetic": 2.9, "band": "Good"}
-    env()
+    env(engagement_zeroshot_evidence="1")
     assert "Q-Align" not in svc.build_engagement_context(res)
-    env(engagement_qalign_evidence="1")
+    env(engagement_zeroshot_evidence="1", engagement_qalign_evidence="1")
     ctx = svc.build_engagement_context(res)
     assert "Q-Align" in ctx and "3.8/5" in ctx and "%" not in ctx.split("VISUAL QUALITY SIGNAL")[1]
 
@@ -200,3 +211,10 @@ def test_parse_response_accepts_json_and_rejects_everything_else():
     for bad in ["I cannot tell", '{"nawp": 40}', '{"nawp": "x", "ecr": 5}', '{"nawp": 0, "ecr": 50}', '{"nawp": 140, "ecr": 50}']:
         with pytest.raises(ValueError):
             app.parse_response(bad)
+
+
+def test_cost_rate_follows_the_gpu_that_ran(env):
+    env()
+    assert em.usd_per_gpu_second("NVIDIA A10") == em.GPU_USD_PER_SECOND["A10"] > em.usd_per_gpu_second("NVIDIA L4")
+    assert em.usd_per_gpu_second("NVIDIA T4") < em.usd_per_gpu_second("NVIDIA L4")
+    assert em.usd_per_gpu_second(None) == em.DEFAULT_USD_PER_GPU_SECOND

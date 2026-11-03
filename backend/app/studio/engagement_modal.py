@@ -29,7 +29,7 @@ MAX_FRAMES = 8
 QALIGN_BANDS = ((1.5, "Bad"), (2.5, "Poor"), (3.5, "Fair"), (4.5, "Good"), (5.01, "Excellent"))
 # APPROXIMATE Modal prices per GPU second (`modal billing rates`, $/hour / 3600); ENGAGEMENT_USD_PER_GPU_SECOND
 # overrides them all. The rate follows the GPU the container reported (the app falls back L4 -> A10G / T4).
-GPU_USD_PER_SECOND = {"L4": 0.000222, "A10G": 0.000306, "T4": 0.000164}
+GPU_USD_PER_SECOND = {"L4": 0.000222, "A10": 0.000306, "T4": 0.000164}  # Modal reports an A10G as "NVIDIA A10"
 DEFAULT_USD_PER_GPU_SECOND = GPU_USD_PER_SECOND["L4"]
 CALL_TIMEOUT_S = float(os.environ.get("ENGAGEMENT_CALL_TIMEOUT_S", "420"))  # includes a possible cold start
 
@@ -78,6 +78,11 @@ def usd_per_gpu_second(gpu_name: str | None = None) -> float:
 def qalign_for_scoring_enabled() -> bool:
     """Flag (default off): hand the Q-Align score to the scoring step as evidence."""
     return (config.get_env("ENGAGEMENT_QALIGN_EVIDENCE") or "").lower() in ("1", "true", "yes", "on")
+
+
+def zero_shot_for_scoring_enabled() -> bool:
+    """Flag (default off): give the zero-shot ECR/NAWP guess to the scoring step as a soft risk hint."""
+    return (config.get_env("ENGAGEMENT_ZEROSHOT_EVIDENCE") or "").lower() in ("1", "true", "yes", "on")
 
 
 def load_frames(frames: list) -> list:

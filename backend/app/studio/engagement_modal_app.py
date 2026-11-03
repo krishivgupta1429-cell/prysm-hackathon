@@ -38,6 +38,9 @@ QALIGN_REVISION = os.environ.get("ENGAGEMENT_QALIGN_REVISION", "main")
 MIN_CONTAINERS = int(os.environ.get("ENGAGEMENT_MIN_CONTAINERS", "0"))
 SCALEDOWN_S = int(os.environ.get("ENGAGEMENT_SCALEDOWN_S", "240"))
 MAX_FRAMES = 8
+# ~250 x 450 px for a 9:16 frame. A 24 GB card holds the 16 GB model plus about 5 GB: at 256 * 28 * 28 per frame the
+# 8-frame vision attention still ran out of memory, at 512 * 28 * 28 by 5.5 GB.
+MAX_PIXELS_PER_FRAME = int(os.environ.get("ENGAGEMENT_QWEN_MAX_PIXELS", str(144 * 28 * 28)))
 
 app = modal.App(APP_NAME)
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
@@ -47,7 +50,8 @@ qwen_image = (
     .pip_install("torch==2.5.1", "torchvision==0.20.1")
     .pip_install("transformers==4.49.0", "accelerate==1.3.0", "qwen-vl-utils==0.0.10", "huggingface_hub==0.27.1",
                  "pillow==11.1.0", "numpy<2")
-    .env({"HF_HOME": f"{CACHE_DIR}/hf", "TOKENIZERS_PARALLELISM": "false", "HF_HUB_DISABLE_TELEMETRY": "1"})
+    .env({"HF_HOME": f"{CACHE_DIR}/hf", "TOKENIZERS_PARALLELISM": "false", "HF_HUB_DISABLE_TELEMETRY": "1",
+          "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
 )
 
 # Q-Align (mPLUG-Owl2 remote code) was written for transformers 4.31 and works with 4.36.1 (its README).
@@ -89,7 +93,7 @@ def build_content(frames: list, niche: str, duration: float) -> list:
             return
         content.append({"type": "text", "text": label})
         for f in fs:
-            content.append({"type": "image", "image": f["image"]})
+            content.append({"type": "image", "image": f["image"], "max_pixels": MAX_PIXELS_PER_FRAME})  # qwen_vl_utils sizes the image itself
             content.append({"type": "text", "text": f"[t={f['timestamp']:.1f}s]"})
 
     section(f"HOOK (first 3s, {len(hook)} frames):", hook)
@@ -120,6 +124,20 @@ def parse_response(text: str) -> tuple:
     return nawp, ecr
 
 
+def plain_errors(fn):
+    """Re-raise any exception as a RuntimeError with a plain message: the caller has no torch installed, so
+    torch.OutOfMemoryError and friends could not even be unpickled there, and the reason would be lost."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            raise RuntimeError(f"{type(e).__name__}: {str(e)[:300]}") from None
+    return wrapper
+
+
 def _decode_frames(frames_in: list) -> list:
     import io
     from PIL import Image
@@ -143,15 +161,16 @@ class QwenZeroShot:
         volume.reload()
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             QWEN_MODEL, revision=QWEN_REVISION, torch_dtype=torch.bfloat16, device_map="cuda")
-        # cap the pixels per frame so 8 frames fit in 24 GB with room to spare
+        # cap the pixels per frame: the vision encoder attends over all patches of all frames at once (see MAX_PIXELS_PER_FRAME)
         self.processor = AutoProcessor.from_pretrained(
-            QWEN_MODEL, revision=QWEN_REVISION, min_pixels=128 * 28 * 28, max_pixels=512 * 28 * 28)
+            QWEN_MODEL, revision=QWEN_REVISION, min_pixels=64 * 28 * 28, max_pixels=MAX_PIXELS_PER_FRAME)
         self.gpu = torch.cuda.get_device_name(0)
         self.boot_seconds = time.time() - t0
         self.born = time.time()
         self.calls = 0
 
     @modal.method()
+    @plain_errors
     def predict(self, frames: list, niche: str = "general", duration: float = 30.0) -> dict:
         """frames = [{"timestamp": float, "jpg": bytes}] (up to 8). Returns raw numbers and timing, or raises."""
         import torch
@@ -165,6 +184,7 @@ class QwenZeroShot:
         images, videos = process_vision_info(messages)
         inputs = self.processor(text=[text], images=images or None, videos=videos or None,
                                 return_tensors="pt", padding=True).to(self.model.device)
+        print(f"[qwen] input tokens={inputs['input_ids'].shape[1]} pixel_values={tuple(inputs['pixel_values'].shape)} grid={inputs['image_grid_thw'].tolist()}", flush=True)
         with torch.no_grad():
             out = self.model.generate(**inputs, max_new_tokens=64, do_sample=False, temperature=None, top_p=None,
                                       top_k=None)
@@ -195,6 +215,7 @@ class QAlign:
         self.calls = 0
 
     @modal.method()
+    @plain_errors
     def score(self, frames: list) -> dict:
         """frames = [{"timestamp", "jpg"}]. Video quality (frames as a clip) and mean per-frame aesthetics, 1 to 5."""
         import io

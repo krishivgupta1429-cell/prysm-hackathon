@@ -291,10 +291,28 @@ def _build_result(nawp: float, ecr: float, source: str) -> Dict[str, Any]:
     }
 
 
+def _qalign_evidence_line(engagement: Dict[str, Any]) -> str:
+    """Q-Align visual quality as scoring evidence, only behind ENGAGEMENT_QALIGN_EVIDENCE (default off). Never a watch percentage."""
+    qa = engagement.get("qalign")
+    if not qa:
+        return ""
+    from app.studio import engagement_modal
+    if not engagement_modal.qalign_for_scoring_enabled():
+        return ""
+    return (f"\nVISUAL QUALITY SIGNAL (Q-Align, picture quality only, not viewer behaviour): "
+            f"quality {qa['quality']:.1f}/5 ({qa['band']}), aesthetics {qa['aesthetic']:.1f}/5.")
+
+
 def build_engagement_context(engagement: Dict[str, Any]) -> str:
     """Format engagement signals into a Claude-readable context string."""
     if not engagement or engagement.get("available") is False:
         return ""
+    if engagement.get("source") == "qwen_zero_shot":
+        from app.studio import engagement_modal
+        # Measured in docs/engagement-bakeoff.md: this guess barely moves with the frames and the baseline scoring
+        # prompt says the Hook / Retention scores MUST align with it, so it stays out of scoring unless asked for.
+        if not engagement_modal.zero_shot_for_scoring_enabled():
+            return _qalign_evidence_line(engagement)
 
     nawp = engagement.get("nawp", 0)
     ecr = engagement.get("ecr", 0)
@@ -332,12 +350,6 @@ def build_engagement_context(engagement: Dict[str, Any]) -> str:
 
     ctx += f"\nINSTRUCTION: {pct_instruction.format(ecr=ecr, nawp=nawp)}"
 
-    # Q-Align visual quality: evidence for scoring only behind a flag (default off). Never a watch percentage.
-    qa = engagement.get("qalign")
-    if qa:
-        from app.studio import engagement_modal
-        if engagement_modal.qalign_for_scoring_enabled():
-            ctx += (f"\nVISUAL QUALITY SIGNAL (Q-Align, picture quality only, not viewer behaviour): "
-                    f"quality {qa['quality']:.1f}/5 ({qa['band']}), aesthetics {qa['aesthetic']:.1f}/5.")
+    ctx += _qalign_evidence_line(engagement)
 
     return ctx
