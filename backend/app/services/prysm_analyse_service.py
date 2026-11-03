@@ -299,6 +299,12 @@ class CostTracker:
         self.items.append({"label": label, "model": "apify", "cost_usd": round(cost_usd, 6)})
         logger.info(f"[Cost] {label}: ${cost_usd:.4f}")
 
+    def add_other(self, label: str, model: str, cost_usd: float):
+        """A cost measured elsewhere (the hackathon's extra-evidence models)."""
+        self.total_usd += cost_usd
+        self.items.append({"label": label, "model": model, "cost_usd": round(cost_usd, 6)})
+        logger.info(f"[Cost] {label}: ${cost_usd:.4f}")
+
     def summary(self) -> Dict[str, Any]:
         return {"items": self.items, "total_usd": round(self.total_usd, 6)}
 
@@ -2351,6 +2357,13 @@ async def run_full_analysis(
         if frames:
             tasks["aesthetics"] = _signals.run(loop.run_in_executor(_executor, score_frames, list(frames)))
 
+        # Extra evidence (hackathon, AI_PROVIDER=meta): consensus transcript, second audio listener, SAM subjects,
+        # the Modal signal models. Each part has its own flag and fails soft; see app/studio/evidence.py.
+        if settings.META_MODE:
+            from app.studio import evidence as _evidence_mod
+            if any(_evidence_mod.enabled_parts().values()):
+                tasks["evidence"] = _evidence_mod.collect_evidence(video_path, work_dir, _pcb)
+
         # Generic trend fetch — runs in parallel with Vision using just niche+platform.
         # After Vision completes we do a quick vibe-enrichment pass if keywords are available.
         # This saves ~30s vs the old approach of waiting for Vision to finish first.
@@ -2407,6 +2420,19 @@ async def run_full_analysis(
             elif acr and not acr.get("found"):
                 logger.info(f"[Prysm] ACRCloud: no song match ({acr.get('reason', 'unknown')})")
 
+        # Extra evidence → the inputs the original prompts already read (whisper_data, gemini_audio, extra_signals, embeddings)
+        _evidence = results_map.get("evidence") if not isinstance(results_map.get("evidence"), Exception) else None
+        _gemini_ok = bool(gemini_audio) and any(k in gemini_audio for k in ("hasMusic", "voiceQuality", "speechSummary"))
+        _extra_signals = ""
+        if _evidence is not None:
+            from app.studio import evidence as _ev
+            whisper_data = _ev.merge_transcript(whisper_data, _evidence)
+            gemini_audio, _second_opinion = _ev.merge_audio(gemini_audio, _evidence)
+            gemini_audio = _ev.merge_music(gemini_audio, bool(gemini_audio.get("songConfirmed")), _evidence)
+            _extra_signals = _ev.extra_signals_text(_evidence, _second_opinion)
+        elif "evidence" in results_map:
+            logger.warning(f"[Prysm] Extra evidence failed: {results_map['evidence']}")
+
         energy_data = {}
         if "energy_curve" in results_map and not isinstance(results_map["energy_curve"], Exception):
             energy_data = results_map["energy_curve"] or {}
@@ -2432,6 +2458,9 @@ async def run_full_analysis(
                 embeddings_result = raw_emb
                 dims = {k: len(v) if v else None for k, v in raw_emb.items()}
                 logger.info(f"[Prysm] Embeddings ready: {dims}")
+
+        if _evidence is not None and not embeddings_result:
+            embeddings_result = _ev.embeddings_from_signals(_evidence)  # the same vectors, from the Modal models
 
         # 2-hour Redis cache keyed on niche+platform+keywords, so repeated analyses
         # of the same content type skip the Gemini search entirely (~40s savings).
@@ -2623,6 +2652,7 @@ async def run_full_analysis(
             trend_data=trend_data, song_trend_match=song_trend_match,
             saved_frames=saved_frames, post_metadata=post_metadata, audio_path=audio_path,
             has_vision=has_vision, has_audio=has_audio,
+            extra_signals=_extra_signals,
         )
         is_competitor = intent == "competitor"
 
@@ -2860,8 +2890,17 @@ async def run_full_analysis(
             apify_cost_usd = _fetch_apify_run_cost(apify_run_id)
             cost.add_apify(apify_cost_usd)
 
+        if _evidence is not None and _evidence.cost_usd:
+            cost.add_other("Extra evidence (Spark audio, Voice Transcribe, SAM 3.1, signal models)", "meta+modal", _evidence.cost_usd)
+
         logger.info(f"[Prysm] Total cost: ${cost.total_usd:.4f}")
         result["_cost"] = cost.summary()
+        if settings.META_MODE:
+            from app.studio import evidence as _ev2
+            _acr_found = bool(gemini_audio and gemini_audio.get("songConfirmed"))
+            _trends_ok = bool(trend_data and (trend_data.get("trendingFormats") or trend_data.get("trendingHashtags") or trend_data.get("trendingAudios")))
+            result["modelsUsed"] = _ev2.models_used(_evidence, whisper_ok=bool(whisper_data.get("hasSpeech")), gemini_ok=_gemini_ok,
+                                                    acr_found=_acr_found, trends_ok=_trends_ok, embeddings_ok=bool(embeddings_result))
 
         result["_debug"] = {
             "visionSucceeded": has_vision,
@@ -2872,6 +2911,8 @@ async def run_full_analysis(
             "language": whisper_data.get("language"),
             "verbalCTA": whisper_data.get("verbalCTA"),
         }
+        if _evidence is not None:
+            result["_debug"]["extraEvidence"] = {"parts": _evidence.parts, "seconds": _evidence.seconds, "notes": _evidence.notes}
 
         if _pcb:
             _pcb("report", "ok")

@@ -11,6 +11,7 @@ export const STUDIO_STAGES: { id: string; label: string; core: boolean }[] = [
   { id: 'consensus', label: 'Cross-checking the transcript', core: false },
   { id: 'subjects', label: 'Spotting people and objects', core: false },
   { id: 'audio', label: 'Listening to the audio', core: true },
+  { id: 'gpu_signals', label: 'Measuring deeper visual and audio signals', core: false },
   { id: 'music_id', label: 'Identifying the music', core: true },
   { id: 'signals', label: 'Reading visual and audio signals', core: true },
   { id: 'trends', label: "Checking what's trending now", core: true },

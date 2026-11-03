@@ -106,10 +106,7 @@ interface Result {
   analysis_id?: string
   edited_video_key?: string
   edit_plan?: { applied_params: string[]; skipped_params: string[] }
-  studio?: {
-    models_used?: { step: string; model: string; status: string; note?: string }[]
-    trends?: { status: string; sources?: { title: string; url: string }[]; hashtags?: string[]; formats?: string[]; audio?: string[] }
-  }
+  modelsUsed?: { step: string; model: string; status: string; note?: string }[]
 }
 
 /* ── Helpers ───────────────────────────────────────────────────────────────── */
@@ -971,30 +968,22 @@ export default function Results() {
               </div>
             </div>
 
-            {/* ═══ MODELS USED (new engine results only) ═══ */}
-            {result.studio?.models_used && (
+            {/* ═══ MODELS USED ═══ */}
+            {result.modelsUsed && result.modelsUsed.length > 0 && (
               <details className="border border-border rounded-2xl px-5 py-3 mb-5">
                 <summary className="cursor-pointer text-[12px] font-semibold tracking-widest uppercase text-foreground/40 font-body">Models used</summary>
                 <ul className="mt-3 space-y-1.5">
-                  {result.studio.models_used.map(m => (
+                  {result.modelsUsed.map(m => (
                     <li key={m.step} className="flex items-baseline justify-between gap-4 text-[12px] font-body">
                       <span className="text-foreground/50">{m.step}</span>
                       <span className="text-foreground/35 text-right">
                         {m.model}
                         {m.note ? ` · ${m.note}` : ''}
-                        {m.status === 'unavailable' || m.status === 'error' ? ' · not available' : ''}
+                        {m.status === 'unavailable' || m.status === 'error' ? ' · not available for this video' : ''}
                       </span>
                     </li>
                   ))}
                 </ul>
-                {result.studio.trends?.status === 'ok' && (result.studio.trends.sources?.length ?? 0) > 0 && (
-                  <p className="mt-3 text-[11px] text-foreground/30 font-body leading-relaxed">
-                    Live trend sources:{' '}
-                    {result.studio.trends.sources!.slice(0, 6).map((src, i) => (
-                      <span key={src.url}>{i > 0 && ', '}<a href={src.url} target="_blank" rel="noopener noreferrer" className="underline">{src.title || 'source'}</a></span>
-                    ))}
-                  </p>
-                )}
               </details>
             )}
 
