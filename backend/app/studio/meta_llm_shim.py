@@ -108,8 +108,28 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def meta_model_for(requested: str | None) -> str:
-    """The Meta model that serves a Claude model id: META_MODEL_MAP entry, else META_MODEL, else muse-spark-1.3."""
+GROUPS = ("vision", "scoring", "chat")
+# Reasoning headroom added to max_tokens, per call group (Spark's hidden reasoning counts against max_tokens; scoring reasons the most)
+GROUP_DEFAULT_HEADROOM = {"vision": 6000, "scoring": 10000, "chat": 6000}
+
+
+def call_group(messages: list, stream: bool = False) -> str:
+    """Which family of calls this is: streamed chat (ARIA) = "chat", any image in the request = "vision", otherwise the
+    text-only scoring/writing calls = "scoring". The group picks the model, headroom and reasoning effort (env below)."""
+    if stream:
+        return "chat"
+    for m in messages or []:
+        c = m.get("content")
+        if isinstance(c, list) and any(isinstance(b, dict) and b.get("type") in ("image", "image_url") for b in c):
+            return "vision"
+    return "scoring"
+
+
+def meta_model_for(requested: str | None, group: str | None = None) -> str:
+    """The Meta model that serves a Claude model id. Order: an explicit muse-/sam- id, a META_MODEL_MAP entry,
+    META_VISION_MODEL / META_SCORING_MODEL / META_CHAT_MODEL for the call's group, META_MODEL, then muse-spark-1.3."""
+    if requested and requested.startswith(("muse-", "sam-")):
+        return requested
     raw = config.get_env("META_MODEL_MAP")
     if raw and requested:
         try:
@@ -118,8 +138,10 @@ def meta_model_for(requested: str | None) -> str:
                 return str(mapped)
         except ValueError:
             log.warning("META_MODEL_MAP is not valid JSON; ignoring it")
-    if requested and requested.startswith(("muse-", "sam-")):
-        return requested
+    if group:
+        by_group = config.get_env(f"META_{group.upper()}_MODEL")
+        if by_group:
+            return by_group
     return config.get_env("META_MODEL") or DEFAULT_MODEL
 
 
@@ -127,8 +149,20 @@ def max_images() -> int:
     return max(1, _env_int("META_MAX_IMAGES_PER_REQUEST", DEFAULT_MAX_IMAGES))
 
 
-def reasoning_headroom() -> int:
-    return max(0, _env_int("META_REASONING_HEADROOM", DEFAULT_HEADROOM))
+def reasoning_headroom(group: str | None = None) -> int:
+    """Tokens added to max_tokens for hidden reasoning: META_<GROUP>_HEADROOM, else META_REASONING_HEADROOM, else the group default."""
+    default = GROUP_DEFAULT_HEADROOM.get(group, DEFAULT_HEADROOM) if group else DEFAULT_HEADROOM
+    if group and config.get_env(f"META_{group.upper()}_HEADROOM"):
+        return max(0, _env_int(f"META_{group.upper()}_HEADROOM", default))
+    return max(0, _env_int("META_REASONING_HEADROOM", default))
+
+
+def reasoning_effort(group: str | None = None) -> str | None:
+    """META_<GROUP>_REASONING_EFFORT, else META_REASONING_EFFORT; streamed chat defaults to "low"."""
+    eff = (config.get_env(f"META_{group.upper()}_REASONING_EFFORT") if group else None) or config.get_env("META_REASONING_EFFORT")
+    if group == "chat":
+        eff = eff or config.get_env("META_CHAT_REASONING_EFFORT") or "low"
+    return eff or None
 
 
 # ------------------------------------------------------------------ request translation
@@ -192,13 +226,13 @@ def build_messages(system, messages: list) -> list:
 
 
 def build_body(model: str, max_tokens: int | None, messages: list, system, temperature=None, headroom: int | None = None,
-               stream: bool = False) -> dict:
+               stream: bool = False, group: str | None = None) -> dict:
+    group = group or call_group(messages, stream)
     body = {"model": model, "messages": build_messages(system, messages)}
     if max_tokens:
-        body["max_tokens"] = int(max_tokens) + (reasoning_headroom() if headroom is None else headroom)
-    # ARIA streams to a person waiting for the first word: it defaults to low reasoning effort (META_CHAT_REASONING_EFFORT)
-    effort = (config.get_env("META_CHAT_REASONING_EFFORT") or config.get_env("META_REASONING_EFFORT") or "low") if stream \
-        else config.get_env("META_REASONING_EFFORT")
+        body["max_tokens"] = int(max_tokens) + (reasoning_headroom(group) if headroom is None else headroom)
+    # ARIA streams to a person waiting for the first word: it defaults to low reasoning effort
+    effort = reasoning_effort(group)
     if effort:
         body["reasoning_effort"] = effort
     if temperature is not None:
@@ -231,12 +265,13 @@ class _Messages:
     async def create(self, *, model: str, max_tokens: int = 1024, messages: list, system=None, temperature=None,
                      **_ignored) -> Message:
         owner = self._owner
-        target = meta_model_for(model)
-        headroom = reasoning_headroom()
+        group = call_group(messages)
+        target = meta_model_for(model, group)
+        headroom = reasoning_headroom(group)
         spent = Usage()
         spent_cost, spent_reasoning = 0.0, 0
         for attempt in range(1, MAX_ATTEMPTS + 1):
-            body = build_body(target, max_tokens, messages, system, temperature, headroom)
+            body = build_body(target, max_tokens, messages, system, temperature, headroom, group=group)
             try:
                 reply = await asyncio.to_thread(owner._post, body)
             except MissingKey as e:
@@ -261,7 +296,7 @@ class _Messages:
         return reply
 
     def stream(self, *, model: str, max_tokens: int = 1024, messages: list, system=None, temperature=None, **_ignored):
-        return _StreamManager(self._owner, meta_model_for(model), max_tokens, messages, system, temperature)
+        return _StreamManager(self._owner, meta_model_for(model, "chat"), max_tokens, messages, system, temperature)
 
 
 class _StreamManager:
@@ -269,7 +304,7 @@ class _StreamManager:
 
     def __init__(self, owner, model, max_tokens, messages, system, temperature):
         self.owner, self.model = owner, model
-        self.body = build_body(model, max_tokens, messages, system, temperature, stream=True)
+        self.body = build_body(model, max_tokens, messages, system, temperature, stream=True, group="chat")
         self.text_stream = self._iter()
         self._text: list[str] = []
         self._usage = Usage()

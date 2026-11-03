@@ -30,6 +30,8 @@ class Settings(BaseSettings):
 
     # ── Hackathon switches (Meta Global AI Developer Hackathon; every default keeps the baseline behaviour) ──
     AI_PROVIDER: str = ""                      # "meta": every Claude call is served by Muse Spark through app/studio/meta_llm_shim.py
+    COACH_STYLE: bool = False                  # hackathon: append app/studio/coach_style.md to the two scoring prompts as an addendum (default off)
+    DEBUG_SAVE_INPUTS: bool = False            # hackathon: save the exact inputs of the scoring calls once per analysis (samples/_local/scoring_inputs) for scripts/rescore.py
     AUTO_EDIT_ENABLED: bool = True             # the baseline auto-edit + R2 upload step after an analysis; the hackathon env switches it off (AUTO_EDIT_ENABLED=0)
     STUDIO_MAX_CONCURRENT: int = 2             # analyses running at once across all processes (safety net)
     DEMO_AUTO_VERIFY: bool = False             # demo mode: new accounts are verified at once (no email provider needed)

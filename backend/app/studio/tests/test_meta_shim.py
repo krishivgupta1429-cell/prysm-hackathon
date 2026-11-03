@@ -68,7 +68,7 @@ def test_max_tokens_gets_reasoning_headroom_and_effort_is_optional(monkeypatch):
     monkeypatch.delenv("META_REASONING_HEADROOM", raising=False)
     monkeypatch.delenv("META_REASONING_EFFORT", raising=False)
     body = shim.build_body("muse-spark-1.3", 7000, [{"role": "user", "content": "x"}], None)
-    assert body["max_tokens"] == 7000 + shim.DEFAULT_HEADROOM and "reasoning_effort" not in body
+    assert body["max_tokens"] == 7000 + shim.GROUP_DEFAULT_HEADROOM["scoring"] and "reasoning_effort" not in body
     monkeypatch.setenv("META_REASONING_EFFORT", "minimal")
     assert shim.build_body("m", 100, [{"role": "user", "content": "x"}], None)["reasoning_effort"] == "minimal"
 
@@ -98,6 +98,7 @@ def fake_message(text, finish="end_turn", tin=10, tout=20):
 
 def test_create_returns_text_usage_and_retries_once_when_reasoning_ate_the_budget(monkeypatch):
     monkeypatch.delenv("META_REASONING_HEADROOM", raising=False)
+    monkeypatch.delenv("META_SCORING_HEADROOM", raising=False)
     client = shim.AsyncAnthropic()
     calls = []
 
@@ -108,7 +109,7 @@ def test_create_returns_text_usage_and_retries_once_when_reasoning_ate_the_budge
     monkeypatch.setattr(client, "_post", post)
     reply = asyncio.run(client.messages.create(model="claude-sonnet-4-6", max_tokens=100, messages=[{"role": "user", "content": "x"}]))
     assert reply.content[0].text == "hello" and reply.usage.input_tokens == 20 and reply.usage.output_tokens == 40  # the wasted attempt is billed too
-    assert calls == [100 + 6000, 100 + 12000]
+    assert calls == [100 + 10000, 100 + 20000]
 
 
 @pytest.mark.parametrize("status,timeout,cls", [(429, False, shim.RateLimitError), (None, True, shim.APITimeoutError),

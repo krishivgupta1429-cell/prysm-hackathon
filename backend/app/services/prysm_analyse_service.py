@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from app.studio.llm_switch import anthropic  # the anthropic package, or Muse Spark behind the same interface (AI_PROVIDER=meta)
+from app.studio import coach_style as _coach_style  # hackathon: COACH_STYLE addendum (off by default)
 from app.studio import quality as _quality  # hackathon: cut-off text check (logging only)
 from app.studio.score_math import normalise_scored_weights, overall_and_predicted  # hackathon: overall over the six scored params, weights normalised to 1
 
@@ -247,6 +248,7 @@ PRICING = {
     # Muse Spark (AI_PROVIDER=meta): published prices per million tokens
     "muse-spark-1.3":    {"input": 1.25, "output": 4.25},
     "muse-spark-1.2":    {"input": 1.25, "output": 4.25},
+    "muse-wonder-1.0":   {"input": 4.0, "output": 20.0},
 }
 
 
@@ -1684,8 +1686,12 @@ def build_scoring_prompts(
     has_vision: bool,
     has_audio: bool,
     extra_signals: str = "",
+    style_addendum: str = "",
 ) -> tuple:
     """Build the two Claude scoring prompts (call A + call B).
+
+    style_addendum="" (default) leaves the prompts exactly as they were; a non-empty text (COACH_STYLE, hackathon) is
+    appended to the end of both prompts and changes nothing above it.
 
     Returns (call_a_prompt, call_b_prompt) as strings ready to pass to Claude.
     extra_signals="" (default) produces prompts identical to pre-extraction
@@ -2202,7 +2208,7 @@ Respond ONLY with valid JSON containing just the "parameters" array for these 4 
   ]
 }}"""
 
-    return (_call_a_prompt, _call_b_prompt)
+    return (_call_a_prompt + style_addendum, _call_b_prompt + style_addendum)
 
 async def run_full_analysis(
     video_path: str,
@@ -2655,8 +2661,22 @@ async def run_full_analysis(
             saved_frames=saved_frames, post_metadata=post_metadata, audio_path=audio_path,
             has_vision=has_vision, has_audio=has_audio,
             extra_signals=_extra_signals,
+            style_addendum=_coach_style.addendum(),
         )
         is_competitor = intent == "competitor"
+        if settings.DEBUG_SAVE_INPUTS:  # hackathon: exact scoring inputs, saved once, for scripts/rescore.py
+            try:
+                from app.studio.rescore import save_inputs
+                save_inputs(dict(
+                    call_a_prompt=_call_a_prompt, call_b_prompt=_call_b_prompt, style_addendum=_coach_style.addendum(),
+                    max_tokens_a=9000 if is_competitor else 7000, max_tokens_b=6000, intent=intent, niche=niche,
+                    platform=platform, source_type=source_type, scored_weights=scored_weights,
+                    whisper_data={k: whisper_data.get(k) for k in ("transcript", "segments", "verbalCTA", "language")},
+                    vision_data={"frames": [{"timestamp": f.get("timestamp"), "onScreenText": f.get("onScreenText")}
+                                            for f in ((vision_data or {}).get("frames") or [])]},
+                    extra_signals=_extra_signals, meta_model=os.environ.get("META_SCORING_MODEL") or os.environ.get("META_MODEL") or "muse-spark-1.3"))
+            except Exception as _se:
+                logger.warning(f"[Debug] could not save scoring inputs: {_se}")
 
         # ── Run both scoring calls in parallel ──
         logger.info(f"[Prysm] Starting parallel Claude scoring (call A: params 1-5, call B: params 6-10)")
