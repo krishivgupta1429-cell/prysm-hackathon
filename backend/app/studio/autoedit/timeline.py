@@ -16,6 +16,7 @@ class Segment:
     src_end: float
     out_start: float = 0.0
     kind: str = "main"   # main | cold (the teaser) | beat (a held first frame, silent)
+    join: float = 0.0    # length of the video dissolve into the NEXT segment (0 = hard cut)
 
     @property
     def length(self) -> float:
@@ -58,7 +59,7 @@ def _grid(t: float, fps: float) -> float:
     return round(round(t * fps) / fps, 4)
 
 
-def build_timeline(ops: list[Op], inp: Inputs) -> Timeline:
+def build_timeline(ops: list[Op], inp: Inputs, dissolve_s: float = 0.0) -> Timeline:
     """Keep-segments of the source after the enabled removing ops, with a cold-open teaser and beat in front when planned."""
     fps = inp.fps or 30.0
     dur = inp.duration
@@ -82,6 +83,11 @@ def build_timeline(ops: list[Op], inp: Inputs) -> Timeline:
     for s in segs:
         s.out_start = t
         t += s.length
+    if dissolve_s > 0:  # a short dissolve into every visible jump cut (a gap of 0.35 s or more), never at word-level cuts or the cold open
+        d = round(round(dissolve_s * fps) / fps, 4)
+        for a, b in zip(segs, segs[1:]):
+            if a.kind == "main" and b.kind == "main" and b.src_start - a.src_end >= 0.35 and a.length > 2 * d and b.length > 2 * d:
+                a.join = d
     return Timeline(segs, fps)
 
 

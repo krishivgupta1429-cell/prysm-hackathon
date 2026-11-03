@@ -41,6 +41,9 @@ class Inputs:
     analysis_times: list[dict] = field(default_factory=list)  # {"t", "step_id", "context"}
     fillers: list[dict] = field(default_factory=list)       # candidates: {"word", "start", "end"}
     asr_cost_usd: float = 0.0
+    beats: list[float] = field(default_factory=list)         # beat times (s) of a music-driven reel
+    bpm: float = 0.0
+    music_driven: bool = False                               # music present and little speech: cuts snap to beats
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -134,6 +137,37 @@ def energy_peaks(wav_path: str | Path, n: int = 6, win_s: float = 0.5) -> list[d
     return peaks
 
 
+BEAT_SNAP_S = 0.12
+MUSIC_DRIVEN_MAX_SPEECH_SHARE = 0.35
+
+
+def speech_share(words: list[dict], duration: float) -> float:
+    return sum(w["end"] - w["start"] for w in words) / duration if duration else 0.0
+
+
+def track_beats(wav_path: str | Path) -> tuple[list[float], float]:
+    """Beat times and tempo of the audio (librosa beat tracker). ([], 0) when no steady beat is found."""
+    import librosa
+    import numpy as np
+    y, sr = librosa.load(str(wav_path), sr=22050, mono=True)
+    if len(y) < sr * 3:
+        return [], 0.0
+    tempo, frames = librosa.beat.beat_track(y=y, sr=sr, units="frames")
+    times = librosa.frames_to_time(frames, sr=sr)
+    bpm = float(np.atleast_1d(tempo)[0])
+    if len(times) < 6:
+        return [], 0.0
+    return [round(float(t), 3) for t in times], round(bpm, 1)
+
+
+def snap_to_beat(t: float, beats: list[float], tol: float = BEAT_SNAP_S) -> float:
+    """The nearest beat within `tol` seconds, else `t` unchanged."""
+    if not beats:
+        return t
+    b = min(beats, key=lambda x: abs(x - t))
+    return b if abs(b - t) <= tol else t
+
+
 def detect_music(analysis: dict | None) -> bool:
     aa = (analysis or {}).get("audioAnalysis") or {}
     g = aa.get("gemini") or {}
@@ -171,7 +205,15 @@ def build_inputs(video_path: str | Path, work_dir: str | Path, analysis: dict | 
         for t, ctx in parse_times(st["text"], dur):
             analysis_times.append({"t": t, "step_id": st["id"], "context": ctx})
     cuts = ffx.scene_cuts(video_path)
+    has_music = detect_music(analysis)
+    beats, bpm, music_driven = [], 0.0, False
+    if info["has_audio"] and (has_music or len(words) < 3):
+        try:
+            beats, bpm = track_beats(wav16)
+        except Exception:
+            beats, bpm = [], 0.0
+        music_driven = bool(beats) and speech_share(words, dur) < MUSIC_DRIVEN_MAX_SPEECH_SHARE
     return Inputs(duration=dur, width=info["width"], height=info["height"], fps=info["fps"], orientation=info["orientation"],
                   is_9x16=info["is_9x16"], has_audio=info["has_audio"], language=language, words=words, segments=segs,
-                  scene_cuts=cuts, silences=silences, energy_peaks=peaks, has_music=detect_music(analysis),
-                  has_speech=len(words) >= 3, analysis_times=analysis_times, fillers=find_fillers(words), asr_cost_usd=asr_cost)
+                  scene_cuts=cuts, silences=silences, energy_peaks=peaks, has_music=has_music,
+                  has_speech=len(words) >= 3, beats=beats, bpm=bpm, music_driven=music_driven, analysis_times=analysis_times, fillers=find_fillers(words), asr_cost_usd=asr_cost)

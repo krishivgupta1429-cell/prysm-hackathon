@@ -8,17 +8,17 @@ PRESETS = {
     "clean": {
         "caption_size": 78, "caption_color": "FFFFFF", "highlight_color": "FFD43B", "caption_position": "lower",
         "caption_font_weight": "bold", "zoom_scale": 1.08, "zoom_max": 3, "cut_aggressiveness": 0.5,
-        "hook_size": 92, "overlay_box": False,
+        "hook_size": 92, "overlay_box": False, "transition": "cut",
     },
     "energetic": {
         "caption_size": 92, "caption_color": "FFFFFF", "highlight_color": "FFE600", "caption_position": "lower",
         "caption_font_weight": "extrabold", "zoom_scale": 1.14, "zoom_max": 6, "cut_aggressiveness": 0.9,
-        "hook_size": 108, "overlay_box": False,
+        "hook_size": 108, "overlay_box": False, "transition": "cut",
     },
     "minimal": {
         "caption_size": 64, "caption_color": "FFFFFF", "highlight_color": "FFFFFF", "caption_position": "lower",
         "caption_font_weight": "regular", "zoom_scale": 1.08, "zoom_max": 1, "cut_aggressiveness": 0.25,
-        "hook_size": 76, "overlay_box": True,
+        "hook_size": 76, "overlay_box": True, "transition": "dissolve",
     },
 }
 DEFAULT_PRESET = "clean"
@@ -38,6 +38,8 @@ def resolve_style(preset: str | None, overrides: dict | None = None) -> dict:
         elif k in ("caption_color", "highlight_color") and isinstance(v, str) and len(v) == 6 and all(c in "0123456789abcdefABCDEF" for c in v):
             style[k] = v.upper()
         elif k == "overlay_box" and isinstance(v, bool):
+            style[k] = v
+        elif k == "transition" and v in ("cut", "dissolve"):
             style[k] = v
         elif k == "caption_font_weight" and v in ("regular", "bold", "extrabold"):
             style[k] = v

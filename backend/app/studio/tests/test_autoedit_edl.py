@@ -117,3 +117,24 @@ def test_garbage_input_returns_an_error_not_an_exception():
 def test_style_overrides_are_clamped():
     v = validate([op(1, "loudnorm", "audio")], style_overrides={"caption_size": 9999, "zoom_scale": 5})
     assert v.edl.style["caption_size"] == 120 and v.edl.style["zoom_scale"] == 1.15
+
+
+def test_music_driven_reels_cut_on_the_beat_within_120_ms():
+    from app.studio.autoedit import inputs as I
+    import numpy as np, soundfile as sf
+    sr = 22050
+    y = np.zeros(12 * sr, dtype="float32")
+    for b in np.arange(0.25, 12, 0.5):  # a click every 0.5 s (120 bpm)
+        i = int(b * sr)
+        y[i:i + 800] += np.sin(2 * np.pi * 1000 * np.arange(800) / sr) * np.exp(-np.arange(800) / sr * 40)
+    import tempfile, os
+    p = tempfile.mktemp(suffix=".wav")
+    sf.write(p, y, sr)
+    beats, bpm = I.track_beats(p)
+    os.unlink(p)
+    assert 100 < bpm < 140 and len(beats) > 10
+    assert I.snap_to_beat(beats[3] + 0.08, beats) == beats[3] and I.snap_to_beat(beats[3] + 0.2, beats) == beats[3] + 0.2  # outside 120 ms: untouched
+    inp = make_inputs(duration=12.0, words=[], segments=[], fillers=[], has_speech=False, has_music=True, music_driven=True, beats=beats, bpm=bpm,
+                      scene_cuts=[round(beats[8] + 0.06, 2), round(beats[14] - 0.05, 2)], silences=[], energy_peaks=[], analysis_times=[])
+    v = E.validate_edl({"ops": [{"id": "o1", "type": "cut_segment", "group": "pacing", "params": {"start": round(beats[8] + 0.06, 2), "end": round(beats[14] - 0.05, 2)}}]}, inp)
+    assert v.edl.ops[0].params["start"] == beats[8] and v.edl.ops[0].params["end"] == beats[14]

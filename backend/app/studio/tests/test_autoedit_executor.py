@@ -195,3 +195,39 @@ def test_timeline_maps_times_and_retimes_words_after_cuts():
     words = T.surviving_words(tl, inp.words)
     assert "um" not in [w["word"] for w in words] and len(words) == len(inp.words) - 1
     assert all(b["start"] >= a["start"] for a, b in zip(words, words[1:]))
+
+
+def test_sfx_adds_quiet_effects_at_visible_cuts_only(tmp_path, clip):
+    ops = [op(1, "cut_segment", "pacing", start=0.85, end=1.8), op(2, "sfx", "audio", level_db=-22)]
+    rr, out, _ = render(tmp_path, clip, ops)
+    plain, out_plain, _ = render(tmp_path / "p", clip, ops[:1])
+    import soundfile as sf
+    def pcm(path):
+        w = path.with_suffix(".wav")
+        ffx.extract_wav(path, w, rate=48000, channels=1)
+        return sf.read(str(w))[0]
+    a, b = pcm(out), pcm(out_plain)
+    n = min(len(a), len(b))
+    diff = np.abs(a[:n] - b[:n])
+    join = int(next(s for s in rr.timeline.segments if s.kind == "main" and s.out_start > 0).out_start * 48000)
+    assert diff[join - 14000:join + 2000].max() > 0.003      # something was added around the cut
+    assert diff.max() < 0.1 * max(np.abs(b).max(), 0.05) + 0.05   # and it is quiet next to the tone
+    assert diff[:join - 20000].max() < 0.002                 # nothing far from the cut
+
+
+def test_sfx_without_cuts_is_skipped_with_a_note(tmp_path, clip):
+    rr, _, _ = render(tmp_path, clip, [op(1, "sfx", "audio")])
+    assert any("sfx skipped" in n for n in rr.notes)
+
+
+def test_dissolve_transition_joins_jump_cuts_and_keeps_audio_and_video_in_sync(tmp_path, clip):
+    ops = [op(1, "cut_segment", "pacing", start=0.85, end=1.8)]
+    hard, out_h, inp = render(tmp_path / "h", clip, ops, style={"preset": "clean"})
+    soft, out_s, _ = render(tmp_path / "s", clip, ops, style={"preset": "clean", "transition": "dissolve"})
+    assert [s.join for s in soft.timeline.segments] == [pytest.approx(0.1333, abs=0.01), 0.0]
+    assert abs(soft.duration - hard.duration) < 1e-6                       # net length is unchanged
+    dur, avdiff = stream_durations(out_s)
+    assert abs(dur - soft.duration) < 0.06 and avdiff <= 0.06
+    join = soft.timeline.segments[1].out_start
+    mid_s, mid_h = frame_gray(out_s, join - 0.06).astype(int), frame_gray(out_h, join - 0.06).astype(int)
+    assert np.abs(mid_s - mid_h).mean() > 0.3                              # a blended frame sits where the hard cut would be a single picture

@@ -18,6 +18,7 @@ from app.studio.autoedit.inputs import Inputs
 from app.studio.autoedit.timeline import Timeline, build_timeline, surviving_words
 
 ZOOM_IN_S, ZOOM_HOLD_S, ZOOM_OUT_S = 0.25, 1.0, 0.4
+DISSOLVE_S = 0.12
 BAND_PAD_PX = 30
 
 
@@ -117,12 +118,13 @@ def place_overlay(text: str, role: str, wanted: str, face_y: tuple[float, float]
 # ------------------------------------------------------------------ the render
 
 def _audio_chain(tl: Timeline, src_label: str, has_duck: bool) -> tuple[list[str], str]:
-    """Filter lines producing [aout0]: per-segment atrim, tail-extended by the cross-fade length, joined with acrossfade (net length = sum of segments)."""
-    d = config.XFADE_S
+    """Filter lines producing [aout0]: per-segment atrim, tail-extended by the cross-fade length of the join after it, joined with
+    acrossfade (net length = sum of the segments). A join's fade is 40 ms, or the length of the video dissolve when there is one."""
     lines, labels = [], []
     n = len(tl.segments)
+    fades = [max(config.XFADE_S, s.join) for s in tl.segments[:-1]]
     for i, s in enumerate(tl.segments):
-        ext = d if i < n - 1 else 0.0
+        ext = fades[i] if i < n - 1 else 0.0
         if s.kind == "beat":
             lines.append(f"aevalsrc=0:s=48000:c=stereo:d={_fmt(s.length + ext)},asetpts=PTS-STARTPTS[a{i}]")
         else:
@@ -135,13 +137,44 @@ def _audio_chain(tl: Timeline, src_label: str, has_duck: bool) -> tuple[list[str
     prev = labels[0]
     for i in range(1, n):
         out = "[aout0]" if i == n - 1 else f"[ax{i}]"
-        lines.append(f"{prev}{labels[i]}acrossfade=d={_fmt(d)}:c1=qsin:c2=qsin{out}")
+        lines.append(f"{prev}{labels[i]}acrossfade=d={_fmt(fades[i - 1])}:c1=qsin:c2=qsin{out}")
         prev = out
     return lines, "[aout0]"
 
 
-def _video_segments(tl: Timeline, inp: Inputs) -> tuple[list[str], str]:
+def sfx_points(tl: Timeline) -> list[tuple[float, str]]:
+    """(output time, kind) where a sound effect belongs: a whoosh into every visible jump cut (a gap of 0.35 s or more removed) and an
+    impact where the cold-open teaser hands over to the video. At most 6."""
+    pts = []
+    segs = tl.segments
+    for i in range(1, len(segs)):
+        a, b = segs[i - 1], segs[i]
+        if b.kind == "beat":
+            pts.append((b.out_start, "impact"))
+        elif b.kind == "main" and a.kind == "main" and b.src_start - a.src_end >= 0.35:
+            pts.append((b.out_start, "whoosh"))
+    return pts[:6]
+
+
+def sfx_lines(points: list[tuple[float, str]], level_db: float) -> tuple[list[str], list[str]]:
+    """Filter lines that synthesise the effects (pink-noise sweep / low sine thump, no samples, no licences) and their labels."""
     lines, labels = [], []
+    for i, (t, kind) in enumerate(points):
+        if kind == "whoosh":
+            at = max(0.0, t - 0.28)
+            lines.append(f"anoisesrc=d=0.4:c=pink:r=48000:a=0.7,highpass=f=500,lowpass=f=7000,afade=t=in:st=0:d=0.28,afade=t=out:st=0.28:d=0.12,"
+                         f"volume={level_db}dB,aformat=sample_fmts=fltp:channel_layouts=stereo,adelay={int(at * 1000)}|{int(at * 1000)}[sx{i}]")
+        else:
+            at = max(0.0, t)
+            lines.append(f"sine=f=58:r=48000:d=0.32,afade=t=out:st=0.02:d=0.3,volume={level_db + 4}dB,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                         f"adelay={int(at * 1000)}|{int(at * 1000)}[sx{i}]")
+        labels.append(f"[sx{i}]")
+    return lines, labels
+
+
+def _video_segments(tl: Timeline, inp: Inputs) -> tuple[list[str], str]:
+    """Trim every segment (extended by the dissolve that follows it), then join: hard cuts with concat, dissolves with xfade."""
+    lines = []
     fps = inp.fps or 30.0
     lines.append(f"[0:v]fps={_fmt(fps)},setpts=PTS-STARTPTS[vsrc]")
     n = len(tl.segments)
@@ -150,9 +183,22 @@ def _video_segments(tl: Timeline, inp: Inputs) -> tuple[list[str], str]:
         if s.kind == "beat":
             lines.append(f"[s{i}]trim=start=0:end={_fmt(1.0 / fps)},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={_fmt(s.length)}[v{i}]")
         else:
-            lines.append(f"[s{i}]trim=start={_fmt(s.src_start)}:end={_fmt(s.src_end)},setpts=PTS-STARTPTS[v{i}]")
-        labels.append(f"[v{i}]")
-    lines.append("".join(labels) + f"concat=n={n}:v=1:a=0[vcat]")
+            lines.append(f"[s{i}]trim=start={_fmt(s.src_start)}:end={_fmt(s.src_end + s.join)},setpts=PTS-STARTPTS[v{i}]")
+    if all(s.join == 0 for s in tl.segments):
+        lines.append("".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[vcat]")
+        return lines, "[vcat]"
+    running = tl.segments[0].length + tl.segments[0].join
+    prev = "[v0]"
+    for i in range(1, n):
+        a = tl.segments[i - 1]
+        out = "[vcat]" if i == n - 1 else f"[vj{i}]"
+        if a.join > 0:
+            lines.append(f"{prev}[v{i}]xfade=transition=fade:duration={_fmt(a.join)}:offset={_fmt(running - a.join)}{out}")
+            running = running + tl.segments[i].length + tl.segments[i].join - a.join
+        else:
+            lines.append(f"{prev}[v{i}]concat=n=2:v=1:a=0{out}")
+            running = running + tl.segments[i].length + tl.segments[i].join
+        prev = out
     return lines, "[vcat]"
 
 
@@ -195,7 +241,7 @@ def plan_pieces(edl: EDL, inp: Inputs, groups: set[str], faces: list[dict] | Non
     mapped onto the new timeline. Pure (no files), so cached renders can be re-described and tests can check it."""
     active = [o for o in edl.ops if o.enabled and o.group in groups]
     style = edl.style
-    tl = build_timeline(active, inp)
+    tl = build_timeline(active, inp, DISSOLVE_S if style.get("transition") == "dissolve" else 0.0)
     notes: list[str] = []
     applied: list[str] = [o.id for o in active]
     caps = any(o.type == "caption_burn" for o in active)
@@ -299,6 +345,15 @@ def render(edl: EDL, inp: Inputs, src: str | Path, out: str | Path, work: str | 
     if inp.has_audio:
         alines, alast = _audio_chain(tl, "[1:a]" if duck_in else "[0:a]", bool(duck_in))
         tail = alast
+        sx = next((o for o in active if o.type == "sfx"), None)
+        pts = sfx_points(tl) if sx is not None else []
+        if pts:
+            sl, labels = sfx_lines(pts, sx.params["level_db"])
+            alines += sl
+            alines.append(f"{tail}{''.join(labels)}amix=inputs={len(labels) + 1}:normalize=0:duration=first:dropout_transition=0[asfx]")
+            tail = "[asfx]"
+        elif sx is not None:
+            notes.append("sfx skipped: no visible cuts to put a sound on")
         if ln is not None:
             m = None
             try:

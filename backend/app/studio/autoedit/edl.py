@@ -12,14 +12,14 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, Field, field_validator
 
 from app.studio.autoedit import config
-from app.studio.autoedit.inputs import Inputs, norm_token, FILLERS_EN, FILLERS_HI
+from app.studio.autoedit.inputs import Inputs, norm_token, FILLERS_EN, FILLERS_HI, snap_to_beat
 from app.studio.autoedit.presets import resolve_style
 
 GROUPS = ("hook", "pacing", "zoom", "text", "audio")  # also the order groups are rendered and verified in
-OP_TYPES = ("trim", "cut_segment", "remove_filler", "cold_open", "text_overlay", "caption_burn", "zoom_punch", "loudnorm", "music_duck")
+OP_TYPES = ("trim", "cut_segment", "remove_filler", "cold_open", "text_overlay", "caption_burn", "zoom_punch", "loudnorm", "music_duck", "sfx")
 TYPE_GROUPS = {
     "trim": {"pacing"}, "cut_segment": {"pacing"}, "remove_filler": {"pacing"}, "cold_open": {"hook"},
-    "text_overlay": {"hook", "text"}, "caption_burn": {"text"}, "zoom_punch": {"zoom"}, "loudnorm": {"audio"}, "music_duck": {"audio"},
+    "text_overlay": {"hook", "text"}, "caption_burn": {"text"}, "zoom_punch": {"zoom"}, "loudnorm": {"audio"}, "music_duck": {"audio"}, "sfx": {"audio"},
 }
 DEFAULT_TARGET = {"hook": "Hook & Opening", "pacing": "Retention & Pacing", "zoom": "Visual Quality & Originality",
                   "text": "On-Screen Text", "audio": "Audio & Music"}
@@ -161,6 +161,10 @@ def _validate_op(op: Op, inp: Inputs, allowed: list[float]) -> None:
     if op.type in ("trim", "cut_segment"):
         _snap_param(p, "start", allowed, inp)
         _snap_param(p, "end", allowed, inp)
+        if inp.music_driven:  # a music-driven reel cuts on the beat (within 120 ms), never at the very start / end of the file
+            for k in ("start", "end"):
+                if 0.3 < p[k] < dur - 0.3:
+                    p[k] = round(snap_to_beat(p[k], inp.beats), 3)
         if p["end"] - p["start"] < 0.3:
             raise ValueError("range is shorter than 0.3 s")
         if op.type == "trim" and not (p["start"] <= 0.5 or p["end"] >= dur - 0.5):
@@ -222,6 +226,8 @@ def _validate_op(op: Op, inp: Inputs, allowed: list[float]) -> None:
         p["target_lufs"] = round(min(max(_num(p.get("target_lufs", -14), "target_lufs"), -16), -12), 1)
         p["true_peak"] = round(min(max(_num(p.get("true_peak", -1.5), "true_peak"), -3), -1), 1)
         p["denoise"] = bool(p.get("denoise", True))
+    elif op.type == "sfx":
+        p["level_db"] = round(min(max(_num(p.get("level_db", -22), "level_db"), -30), -12), 1)  # always mixed low
     elif op.type == "music_duck":
         if not (inp.has_music and inp.has_speech):
             raise ValueError("music ducking needs detected music and speech")
@@ -303,7 +309,7 @@ def validate_edl(raw: dict | EDL, inp: Inputs, style_overrides: dict | None = No
     errors, notes = [], []
 
     # one loudnorm / caption_burn / music_duck at most
-    for t in ("loudnorm", "caption_burn", "music_duck", "cold_open"):
+    for t in ("loudnorm", "caption_burn", "music_duck", "cold_open", "sfx"):
         same = [o for o in kept if o.type == t]
         for extra in same[1:]:
             kept.remove(extra)

@@ -99,6 +99,7 @@ OPERATION TYPES (group in brackets; times are seconds of the ORIGINAL video)
 - caption_burn [text] {{}}: burned-in word-highlight captions from the transcript. Do NOT add it when existing_on_screen_text_share >= 0.4 (the video already has captions) or there is no speech
 - zoom_punch [zoom] {{"at","scale":1.08-1.15,"duration":0.25}}: a quick punch-in at an emphasis moment (a word start / a cut / an analysis timestamp); at most one per 2.5 s, usually 2-4 per video
 - loudnorm [audio] {{"target_lufs":-14,"true_peak":-1.5,"denoise":true}}: loudness to -14 LUFS and light denoise. Add it when an audio step asks for it or loudness/clarity is a problem
+- sfx [audio] {{"level_db":-22}}: subtle synthesised whoosh at visible jump cuts and an impact at a cold open; only worth it for the energetic preset or fast music-driven reels, and only together with cuts
 - music_duck [audio] {{"duck_db":-9}}: lowers the music under speech; only when has_music and has_speech
 
 RULES
