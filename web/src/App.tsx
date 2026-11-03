@@ -2,6 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Index from "./pages/Index";
 import Analyse from "./pages/Analyse";
@@ -27,6 +28,11 @@ import Cookies from "./pages/Cookies";
 import NotFound from "./pages/NotFound";
 import SmoothScroll from "./providers/SmoothScroll";
 import { STUDIO_MODE, ALLOW_LINKS } from "./lib/config";
+
+// Local-only review page for the blind bake-off: exists only on the dev server with VITE_DEV_BAKEOFF=1 (import.meta.env.DEV is false in
+// production builds, so the page and its chunk are dropped from them).
+const DEV_BAKEOFF = import.meta.env.DEV && import.meta.env.VITE_DEV_BAKEOFF === '1'
+const DevBakeoff = DEV_BAKEOFF ? lazy(() => import('./studio/DevBakeoff')) : null
 
 const queryClient = new QueryClient();
 
@@ -57,6 +63,7 @@ const App = () => (
             <Route path="/settings" element={gated ? <Waitlist /> : <Settings />} />
             <Route path="/pricing" element={STUDIO_MODE ? <Navigate to="/" replace /> : <PricingPage />} />
             <Route path="/share/:shareId" element={<SharedResults />} />
+            {DevBakeoff && <Route path="/dev/bakeoff" element={<Suspense fallback={null}><DevBakeoff /></Suspense>} />}
             <Route path="/waitlist" element={<Waitlist />} />
             <Route path="/privacy" element={<Privacy />} />
             <Route path="/terms" element={<Terms />} />

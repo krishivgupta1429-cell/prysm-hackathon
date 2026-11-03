@@ -471,7 +471,8 @@ function AudioEnergyCurve({ energy }: { energy: EnergyCurve }) {
 /*  MAIN COMPONENT                                                          */
 /* ══════════════════════════════════════════════════════════════════════════ */
 
-export default function Results() {
+// `injected` (hackathon, local /dev/bakeoff page only): render this result instead of the one in localStorage; no video, no network side effects.
+export default function Results({ injected }: { injected?: Record<string, unknown> } = {}) {
   const [result, setResult] = useState<Result | null>(null)
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [expandedFix, setExpandedFix] = useState<number | null>(null)
@@ -536,7 +537,7 @@ export default function Results() {
     // Always verify plan from backend — never trust localStorage alone for gating
     fetchUser().then(u => { if (u) setVerifiedPlan(u.plan) })
 
-    const stored = localStorage.getItem('prysm_result')
+    const stored = injected ? JSON.stringify(injected) : localStorage.getItem('prysm_result')
     if (!stored) { navigate('/analyse'); return }
     try {
       const parsed = JSON.parse(stored)
@@ -553,7 +554,7 @@ export default function Results() {
       setResult(parsed)
 
       // Load video from IndexedDB (for uploads) or skip (for links).
-      const source = localStorage.getItem('prysm_video_source')
+      const source = injected ? null : localStorage.getItem('prysm_video_source')
       if (source === 'upload') {
         getVideoUrl(parsed.analysis_id).then(url => { if (url) setVideoUrl(url) })
       } else if (source === 'link' && parsed.analysis_id && (!parsed.frames || parsed.frames.length === 0)) {

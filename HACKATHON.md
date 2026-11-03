@@ -60,7 +60,7 @@ Every baseline file changed, and why. Everything except the model call sites is 
 | `backend/app/routers/admin.py` | Share URL base comes from `FRONTEND_URL` instead of a hard-coded production site. |
 | `backend/app/core/config.py` | New settings (`AI_PROVIDER`, `AUTO_EDIT_ENABLED`, `COACH_STYLE`, `DEBUG_SAVE_INPUTS`, `STUDIO_*` incl. `STUDIO_EXPOSE_COST`, `DEMO_AUTO_VERIFY`, `CORS_ORIGINS`, `TRUSTED_HOSTS`, `CSP_CONNECT_SRC`, `PROMOTE_EMAILS`, `META_MODE`); `extra=ignore`; production URLs and emails removed from defaults. |
 | `backend/app/core/middleware.py` | Rate limiter: the analysis status poll is exempt from the global per-IP limit (it keeps its own per-user limit of 120 a minute) and every window is fixed from its first request instead of being pushed back by each request (see "Changes to baseline behaviour"). |
-| `backend/app/main.py` | Promoted emails, CORS origins, trusted hosts and CSP read from settings; Razorpay CSP entries only when its key is set. |
+| `backend/app/main.py` | `DEV_BAKEOFF=1` (local only) mounts the bake-off review endpoints; | Promoted emails, CORS origins, trusted hosts and CSP read from settings; Razorpay CSP entries only when its key is set. |
 | `backend/app/services/r2_service.py` | Fails soft: logs once when R2 keys are missing. |
 | `backend/app/services/email_service.py` | Email footer uses `FRONTEND_URL`; production social links removed. |
 | `backend/Dockerfile`, `backend/.env.example` | Installs `requirements-studio.txt`; names of every new variable. |
@@ -103,3 +103,7 @@ Also fixed in the hackathon layer: replies that Spark's hidden reasoning cut off
 - It is shown on the results page only when `VITE_SHOW_COST_PANEL=1` (local) or the logged-in user is the founder (`VITE_FOUNDER_EMAIL`), and the backend only serves it to the founder (`FOUNDER_EMAIL`) or while `STUDIO_EXPOSE_COST=1` (local). It is never in the normal analysis payload or on a public share link.
 - `scripts/meta_cost_check.md` explains how to compare one analysis with Meta's usage dashboard (balance before and after).
 - **`STUDIO_DAILY_SPEND_CAP_USD`** (the hidden safety net): total real cost of all analyses and chat messages per UTC day before new analyses are refused. Code default **10**; the local test stack sets **25**. See `DEPLOY.md` for the other safety-net limits.
+
+## Local bake-off review page
+
+`/dev/bakeoff` on the local dev server shows the saved blind variants (X/Y/Z per video) through the real results page, with "My pick" per video (kept in localStorage), "Copy my picks" and a "Reveal key" button that then shows model, style, cost and time. It exists only with `VITE_DEV_BAKEOFF=1` on the Vite dev server (`import.meta.env.DEV`, so it is never in a production build) and `DEV_BAKEOFF=1` on the backend, whose endpoints (`backend/app/studio/dev_bakeoff.py`) refuse any non-local request and return no model, cost, time or token data until the reveal call. Both flags are off in the `.env.example` files. Baseline files touched: `backend/app/main.py` (flag-gated router), `backend/app/core/config.py` (the flag), `web/src/App.tsx` (flag-gated route), `web/src/pages/Results.tsx` (optional `injected` prop used only by that page).
