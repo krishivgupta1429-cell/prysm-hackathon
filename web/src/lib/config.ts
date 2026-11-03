@@ -18,3 +18,8 @@ export const SOCIAL_LINKS = {
   linkedin: (env.VITE_SOCIAL_LINKEDIN as string | undefined) || '',
   instagram: (env.VITE_SOCIAL_INSTAGRAM as string | undefined) || '',
 }
+
+/** VITE_SHOW_COST_PANEL=1 (local testing) shows the per-analysis cost panel on the results page. It is also shown to the logged-in user whose
+ *  email equals VITE_FOUNDER_EMAIL. The backend still decides: it answers 404 for anyone who may not see the numbers. */
+export const SHOW_COST_PANEL: boolean = env.VITE_SHOW_COST_PANEL === '1'
+export const FOUNDER_EMAIL: string = ((env.VITE_FOUNDER_EMAIL as string | undefined) || '').trim().toLowerCase()

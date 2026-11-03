@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { STUDIO_MODE } from '@/lib/config'
+import CostPanel from '@/studio/CostPanel'
 
 interface Parameter {
   name: string
@@ -967,6 +968,9 @@ export default function Results() {
                 )}
               </div>
             </div>
+
+            {/* ═══ COST BREAKDOWN (local flag or founder only; renders nothing otherwise) ═══ */}
+            <CostPanel analysisId={result.analysis_id} />
 
             {/* ═══ MODELS USED ═══ */}
             {result.modelsUsed && result.modelsUsed.length > 0 && (
