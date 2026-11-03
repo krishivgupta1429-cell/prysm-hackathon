@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+CWD = Path.cwd()  # the script moves into backend/; relative paths given on the command line are resolved against where it was started
 sys.path.insert(0, str(ROOT / "backend"))
 os.chdir(ROOT / "backend")
 os.environ["AI_PROVIDER"] = "meta"
@@ -33,9 +34,9 @@ def main():
     ap.add_argument("--out", help="write {result, raw, stats} here")
     a = ap.parse_args()
     from app.studio.rescore import load_inputs, rescore
-    out = asyncio.run(rescore(load_inputs(a.inputs), model=a.model, style=bool(a.style)))
+    out = asyncio.run(rescore(load_inputs(CWD / a.inputs), model=a.model, style=bool(a.style)))
     if a.out:
-        Path(a.out).write_text(json.dumps(out, ensure_ascii=False, indent=1))
+        (CWD / a.out).write_text(json.dumps(out, ensure_ascii=False, indent=1))
     print(json.dumps(out["stats"]["metrics"], indent=1))
 
 
