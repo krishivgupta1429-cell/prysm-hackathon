@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+venv/
+.venv/
+
+# Environment
+.env
+.env.local
+
+# Redis
+dump.rdb
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+*.log
+cookies.txt
+instagram_cookies.txt
+scripts/niche_research/instagram_cookies.txt

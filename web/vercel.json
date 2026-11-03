@@ -1,0 +1,14 @@
+{
+  "rewrites": [
+    { "source": "/auth/:path*", "destination": "https://YOUR-BACKEND-URL.example.com/auth/:path*" },
+    { "source": "/prysm/:path*", "destination": "https://YOUR-BACKEND-URL.example.com/prysm/:path*" },
+    { "source": "/billing/:path*", "destination": "https://YOUR-BACKEND-URL.example.com/billing/:path*" },
+    { "source": "/media/:path*", "destination": "https://YOUR-BACKEND-URL.example.com/media/:path*" },
+    { "source": "/analyze/:path*", "destination": "https://YOUR-BACKEND-URL.example.com/analyze/:path*" },
+    { "source": "/chat/:path*", "destination": "https://YOUR-BACKEND-URL.example.com/chat/:path*" },
+    { "source": "/creator/:path*", "destination": "https://YOUR-BACKEND-URL.example.com/creator/:path*" },
+    { "source": "/intelligence/:path*", "destination": "https://YOUR-BACKEND-URL.example.com/intelligence/:path*" },
+    { "source": "/health", "destination": "https://YOUR-BACKEND-URL.example.com/health" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

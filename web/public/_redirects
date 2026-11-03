@@ -1,0 +1,10 @@
+# Backend API proxies
+/auth/*  https://YOUR-BACKEND-URL.example.com/auth/:splat  200
+/prysm/*  https://YOUR-BACKEND-URL.example.com/prysm/:splat  200
+/billing/*  https://YOUR-BACKEND-URL.example.com/billing/:splat  200
+/media/*  https://YOUR-BACKEND-URL.example.com/media/:splat  200
+/analyze/*  https://YOUR-BACKEND-URL.example.com/analyze/:splat  200
+/health  https://YOUR-BACKEND-URL.example.com/health  200
+
+# SPA fallback — all other routes serve the React app
+/*  /index.html  200

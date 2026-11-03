@@ -1,0 +1,76 @@
+# ══════════════════════════════════════════════════════════════
+# Prysm Backend — Python dependencies
+# Claude-only: no OpenAI, no Whisper, no GPT-4o
+# ══════════════════════════════════════════════════════════════
+
+# ── Core framework ────────────────────────────────────────────
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+uvloop==0.21.0
+pydantic==2.10.3
+pydantic-settings==2.7.0
+python-multipart==0.0.19
+starlette==0.41.3
+
+# ── Database ──────────────────────────────────────────────────
+sqlalchemy==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+psycopg2-binary==2.9.10
+pgvector==0.3.6
+
+# ── Redis & Celery ────────────────────────────────────────────
+redis==5.2.1
+celery[redis]==5.4.0
+flower==2.0.1
+
+# ── Auth & Security ───────────────────────────────────────────
+python-jose[cryptography]==3.3.0
+bcrypt==4.2.1
+passlib==1.7.4
+
+# ── AI — Multi-model ──────────────────────────────────────────
+anthropic==0.40.0
+groq==0.13.0
+google-genai
+
+# ── Audio analysis ───────────────────────────────────────────
+librosa==0.10.2
+numpy>=1.24.0
+soundfile>=0.12.1
+
+# ── Media processing ─────────────────────────────────────────
+yt-dlp
+aiofiles==24.1.0
+Pillow==11.0.0
+# FFmpeg must be installed system-wide: brew install ffmpeg
+
+# ── Storage ───────────────────────────────────────────────────
+boto3==1.35.88
+
+# ── HTTP / Scraping ───────────────────────────────────────────
+httpx==0.28.1
+beautifulsoup4==4.12.3
+
+# ── Vector DB ─────────────────────────────────────────────────
+pinecone-client==5.0.1
+
+# ── Monitoring ────────────────────────────────────────────────
+prometheus-client==0.21.1
+structlog==24.4.0
+
+# ── Billing ───────────────────────────────────────────────────
+stripe==11.3.0
+razorpay>=2.0.0
+
+# ── Utilities ────────────────────────────────────────────────
+python-dotenv==1.0.1
+tenacity==9.0.0
+orjson==3.10.12
+email-validator
+greenlet
+# brevo emails sent via httpx (already installed)
+json-repair
+apify-client
+requests
+pyacrcloud==1.0.12

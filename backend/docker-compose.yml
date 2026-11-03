@@ -1,0 +1,173 @@
+version: "3.9"
+
+# ── Creator AI v2 – Full Production Stack ─────────────────────────────────────
+#
+# Services:
+#   api            – FastAPI application
+#   worker_video   – Celery: video download + transcription
+#   worker_analysis– Celery: AI analysis pipeline
+#   worker_intel   – Celery: creator scraping + competitor analysis
+#   worker_clips   – Celery: clip generation (high-resource)
+#   celery_beat    – Scheduled tasks (trend refresh)
+#   flower         – Celery monitoring dashboard
+#   postgres       – PostgreSQL 16 + pgvector
+#   redis          – Redis 7 (broker + cache + results)
+#   prometheus     – Metrics scraping
+#   grafana        – Metrics dashboards
+
+x-worker-defaults: &worker-defaults
+  build: .
+  env_file: .env
+  volumes:
+    - .:/app
+    - media_storage:/tmp/creator_ai/media
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+
+  # ── API Server ──────────────────────────────────────────────────────────────
+  api:
+    <<: *worker-defaults
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0 --port 8000
+      --workers 4
+      --loop uvloop
+      --http h11
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ── Video Worker ─────────────────────────────────────────────────────────────
+  worker_video:
+    <<: *worker-defaults
+    command: >
+      celery -A app.workers.celery_app worker
+      -Q video -c 2 --loglevel=info
+      --max-tasks-per-child=20
+
+  # ── Analysis Worker ──────────────────────────────────────────────────────────
+  worker_analysis:
+    <<: *worker-defaults
+    command: >
+      celery -A app.workers.celery_app worker
+      -Q analysis,default -c 4 --loglevel=info
+      --max-tasks-per-child=50
+
+  # ── Intelligence Worker (scraping, competitor, timeline) ─────────────────────
+  worker_intel:
+    <<: *worker-defaults
+    command: >
+      celery -A app.workers.celery_app worker
+      -Q intelligence -c 3 --loglevel=info
+      --max-tasks-per-child=20
+
+  # ── Clips Worker (high-resource FFmpeg jobs) ──────────────────────────────────
+  worker_clips:
+    <<: *worker-defaults
+    command: >
+      celery -A app.workers.celery_app worker
+      -Q clips -c 2 --loglevel=info
+      --max-tasks-per-child=5
+
+  # ── Celery Beat (scheduled tasks) ────────────────────────────────────────────
+  celery_beat:
+    <<: *worker-defaults
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    volumes:
+      - .:/app
+
+  # ── Flower (Celery monitoring) ────────────────────────────────────────────────
+  flower:
+    <<: *worker-defaults
+    command: >
+      celery -A app.workers.celery_app flower
+      --port=5555 --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-changeme}
+    ports:
+      - "5555:5555"
+
+  # ── PostgreSQL 16 + pgvector ─────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB:       creatorai
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d creatorai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Redis 7 ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1000
+      --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # ── Prometheus ────────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    restart: unless-stopped
+
+  # ── Grafana ───────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-changeme}
+      GF_USERS_ALLOW_SIGN_UP:     "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_storage:
+  prometheus_data:
+  grafana_data:

@@ -1,0 +1,45 @@
+[build]
+  publish = "dist"
+  command = "npm run build"
+
+[[redirects]]
+  from = "/auth/*"
+  to = "https://YOUR-BACKEND-URL.example.com/auth/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/prysm/*"
+  to = "https://YOUR-BACKEND-URL.example.com/prysm/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/billing/*"
+  to = "https://YOUR-BACKEND-URL.example.com/billing/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/media/*"
+  to = "https://YOUR-BACKEND-URL.example.com/media/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/analyze/*"
+  to = "https://YOUR-BACKEND-URL.example.com/analyze/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/health"
+  to = "https://YOUR-BACKEND-URL.example.com/health"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+  force = true
