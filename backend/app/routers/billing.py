@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.studio.safety import unlimited_view
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.cache import redis_client
@@ -39,6 +40,8 @@ router = APIRouter()
 # ── Razorpay client ──────────────────────────────────────────────────────────
 
 def _get_razorpay() -> razorpay.Client:
+    if not settings.RAZORPAY_KEY_ID or not settings.RAZORPAY_KEY_SECRET:
+        raise HTTPException(status_code=503, detail="Payments are not enabled in this deployment.")
     return razorpay.Client(
         auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET)
     )
@@ -361,10 +364,11 @@ async def billing_status(
     """Get current billing status — plan, credits, usage."""
     plan = current_user.plan.value if hasattr(current_user.plan, 'value') else str(current_user.plan)
     plan_config = PLAN_CONFIG.get(plan, {})
+    plan, shown_credits = unlimited_view(settings.STUDIO_UNLIMITED, plan, round(current_user.credits, 1))
 
     return {
         "plan": plan,
-        "credits": round(current_user.credits, 1),
+        "credits": shown_credits,
         "monthly_credits": plan_config.get("credits", 0),
         "rollover_credits": round(current_user.rollover_credits, 1),
         "billing_cycle": current_user.billing_cycle or "monthly",
@@ -469,10 +473,12 @@ async def get_usage(
     if plan == "free":
         credits_consumed = round(sum(e["credits"] for e in events), 1)
 
+    plan, credits_remaining = unlimited_view(settings.STUDIO_UNLIMITED, plan, round(current_user.credits or 0, 1))
+
     return {
         "plan": plan,
         "monthly_credits": monthly_credits,
-        "credits_remaining": round(current_user.credits or 0, 1),
+        "credits_remaining": credits_remaining,
         "credits_consumed": credits_consumed,
         "cycle_start": cycle_start.isoformat(),
         "plan_expires_at": current_user.plan_expires_at.isoformat() if current_user.plan_expires_at else None,

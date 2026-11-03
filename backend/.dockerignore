@@ -1,0 +1,10 @@
+# Hackathon-built (Meta Global AI Developer Hackathon): keep secrets and local environments out of the image.
+.env
+.env.*
+!.env.example
+!.env.studio.example
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/

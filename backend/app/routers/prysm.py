@@ -32,16 +32,16 @@ from app.core.cache import cache_set, cache_get
 from app.models.user import User
 from app.models.prysm_analysis import PrysmAnalysis, PerformanceFeedback
 
-import anthropic
 from app.core.config import settings
 
 router = APIRouter()
 
-_chat_client: Optional[anthropic.AsyncAnthropic] = None
+_chat_client = None  # created on first use
 
-def _get_chat_client() -> anthropic.AsyncAnthropic:
+def _get_chat_client():
     global _chat_client
     if _chat_client is None:
+        from app.studio.llm_switch import anthropic  # the anthropic package, or Muse Spark behind the same interface (AI_PROVIDER=meta)
         _chat_client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
     return _chat_client
 
@@ -111,7 +111,16 @@ def ensure_worker():
 
 @router.get("/analyse/status/{job_id}")
 async def get_analyse_status(job_id: str):
-    """Poll job status -- returns {status, result?, error?}."""
+    """Poll job status -- returns {status, result?, error?} (plus "progress" while the pipeline runs)."""
+    resp = await _job_status(job_id)
+    if settings.META_MODE:
+        progress = await cache_get(f"prysm:progress:{job_id}")
+        if progress:
+            resp["progress"] = progress
+    return resp
+
+
+async def _job_status(job_id: str) -> dict:
     cached = await cache_get(f"prysm:job:{job_id}")
     if not cached:
         return {"status": "processing"}
@@ -123,6 +132,10 @@ async def get_analyse_status(job_id: str):
     if s == "credits_exhausted":
         return {"status": "credits_exhausted", "plan": cached.get("plan", "free")}
     return {"status": "processing"}
+
+
+class _NoCharge(Exception):
+    """Internal: skips the credit deduction block (STUDIO_UNLIMITED)."""
 
 
 async def _run_analysis_task(
@@ -151,6 +164,7 @@ async def _run_analysis_task(
     CREDITS_PER_USD = 31.44
 
     start_time = time.time()
+    global_slot_held = False
     # Track Stage 1 cost already deducted mid-pipeline so the final settlement
     # only charges the remaining Stage 2 cost (avoids double-charging).
     stage1_already_charged_usd = 0.0
@@ -185,6 +199,17 @@ async def _run_analysis_task(
                     _log.warning(f"[Prysm] Credit checkpoint failed: {e}")
                     return False
 
+        progress = None
+        if settings.META_MODE:
+            from app.studio import safety
+            from app.studio.safety import limits_from_settings
+            from app.studio.progress import Progress
+            from app.core.cache import redis_client as _gr
+            # Queued jobs wait here until fewer than STUDIO_MAX_CONCURRENT analyses run across all processes
+            if not await safety.acquire_global_slot(_gr, limits_from_settings(settings)):
+                raise RuntimeError("Prysm is busy right now. Please try again in a few minutes.")
+            global_slot_held = True
+            progress = Progress(job_id)
         result = await run_full_analysis(
             video_path=video_path,
             niche=niche,
@@ -194,14 +219,23 @@ async def _run_analysis_task(
             post_metadata=post_metadata,
             intent=intent,
             source_type=source_type,
-            credit_checker=credit_checker,
+            credit_checker=None if settings.STUDIO_UNLIMITED else credit_checker,
+            progress_cb=progress,
         )
+        if progress is not None:
+            await progress.flush()
+            try:
+                await safety.record_spend(_gr, float((result.get("_cost") or {}).get("total_usd") or 0.0))
+            except Exception as spend_err:
+                _log.warning(f"[Prysm] Could not record spend for job {job_id}: {spend_err}")
         processing_time = time.time() - start_time
 
         # Deduct remaining cost (total minus what Stage 1 checkpoint already charged)
         credits_exhausted = False
         async with AsyncSessionLocal() as credit_db:
             try:
+                if settings.STUDIO_UNLIMITED:
+                    raise _NoCharge()  # unlimited mode: the real _cost stays on the result and the saved analysis, nothing is deducted
                 cu = (await credit_db.execute(
                     select(User).where(User.id == user_id).with_for_update()
                 )).scalar_one_or_none()
@@ -222,6 +256,8 @@ async def _run_analysis_task(
                         f"remaining_usd=${remaining_usd:.4f} ({remaining_credits} credits), "
                         f"before={credits_before}, after={cu.credits}, exhausted={credits_exhausted}"
                     )
+            except _NoCharge:
+                pass
             except Exception as ce:
                 _log.warning(f"[Prysm] Credit deduction failed: {ce}")
 
@@ -290,7 +326,7 @@ async def _run_analysis_task(
 
         # ── Auto-edit: apply suggestions to video via FFmpeg, upload to R2 ──
         # Only for uploaded videos (not link analyses — we don't keep downloaded copies)
-        if source_type == "upload" and video_path and os.path.exists(video_path):
+        if settings.AUTO_EDIT_ENABLED and source_type == "upload" and video_path and os.path.exists(video_path):
             try:
                 from app.services.auto_edit_service import build_edit_plan, render_edited_video, get_video_duration
                 from app.services.r2_service import upload_video as r2_upload
@@ -381,6 +417,15 @@ async def _run_analysis_task(
         await cache_set(f"prysm:job:{job_id}", {"status": "failed", "error": str(e)}, ttl=3600)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+        if settings.META_MODE:
+            from app.studio import safety
+            from app.core.cache import redis_client as _fr
+            try:
+                if global_slot_held:
+                    await safety.release_global_slot(_fr)
+                await safety.release_user(_fr, str(user_id))
+            except Exception as release_err:
+                _log.warning(f"[Prysm] Could not release safety-net slots for job {job_id}: {release_err}")
 
 
 @router.post("/analyse")
@@ -401,6 +446,8 @@ async def analyse_video(
     """
     if not video and not url:
         raise HTTPException(status_code=400, detail="Provide a video file or URL.")
+    if not settings.STUDIO_ALLOW_LINKS and url and url.strip() and not (video and video.size):
+        raise HTTPException(status_code=400, detail="Reel links are switched off in this deployment. Please upload your video instead.")
 
     import logging
     _log = logging.getLogger(__name__)
@@ -430,16 +477,31 @@ async def analyse_video(
 
     _log.info(f"[Prysm] Analyse request -- user_id={current_user.id}")
 
+    if settings.META_MODE:
+        # Hidden budget safety net: refuse early (before the upload is processed) once today's spend cap is reached
+        from app.studio import safety
+        from app.studio.safety import limits_from_settings
+        from app.core.cache import redis_client as _sr
+        try:
+            await safety.check_daily_cap(_sr, limits_from_settings(settings))
+        except safety.LimitExceeded as limit:
+            raise HTTPException(status_code=limit.status_code, detail=limit.message)
+        except Exception as limit_err:
+            _log.warning(f"[Prysm] Safety-net check failed (Redis down?): {limit_err}")
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable — please try again in a moment.")
+
     # Credit gate — must have at least something; actual deduction happens after analysis completes
-    locked_result = await db.execute(select(User).where(User.id == current_user.id).with_for_update())
-    locked_user = locked_result.scalar_one()
-    if locked_user.credits <= 0:
-        raise HTTPException(
-            status_code=402,
-            detail="You're out of credits. Upgrade your plan to run more analyses.",
-        )
-    await db.commit()
-    current_user = locked_user
+    # (STUDIO_UNLIMITED: there are no credits, so there is no gate)
+    if not settings.STUDIO_UNLIMITED:
+        locked_result = await db.execute(select(User).where(User.id == current_user.id).with_for_update())
+        locked_user = locked_result.scalar_one()
+        if locked_user.credits <= 0:
+            raise HTTPException(
+                status_code=402,
+                detail="You're out of credits. Upgrade your plan to run more analyses.",
+            )
+        await db.commit()
+        current_user = locked_user
 
     from app.services.prysm_analyse_service import download_video, extract_post_metadata
 
@@ -508,6 +570,18 @@ async def analyse_video(
         shutil.rmtree(work_dir, ignore_errors=True)
         _log.error(f"[Prysm] Unexpected analyse error: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
+
+    if settings.META_MODE:
+        # Safety net: one running analysis per user and an hourly limit. The slot is released when the job ends.
+        try:
+            await safety.admit(_sr, str(current_user.id), limits_from_settings(settings))
+        except safety.LimitExceeded as limit:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            raise HTTPException(status_code=limit.status_code, detail=limit.message)
+        except Exception as limit_err:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            _log.warning(f"[Prysm] Safety-net admit failed (Redis down?): {limit_err}")
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable — please try again in a moment.")
 
     # Push job to Redis queue -- picked up by the persistent _worker_loop.
     # This survives process restarts: the job stays in Redis until processed.
@@ -598,12 +672,17 @@ async def get_dashboard(
     own_avg = round(sum(a.overall_score for a in own_analyses) / len(own_analyses)) if own_analyses else 0
     competitor_avg = round(sum(a.overall_score for a in competitor_analyses) / len(competitor_analyses)) if competitor_analyses else 0
 
+    from app.studio.safety import unlimited_view
+    shown_plan, shown_credits = unlimited_view(
+        settings.STUDIO_UNLIMITED,
+        current_user.plan.value if hasattr(current_user.plan, 'value') else str(current_user.plan),
+        round(current_user.credits, 1))
     return {
         "user": {
             "username": current_user.username,
             "email": current_user.email,
-            "plan": current_user.plan.value if hasattr(current_user.plan, 'value') else str(current_user.plan),
-            "credits": round(current_user.credits, 1),
+            "plan": shown_plan,
+            "credits": shown_credits,
         },
         "analyses": serialized,
         "total_analyses": len(analyses),
@@ -981,6 +1060,8 @@ async def get_shared_analysis(
         if sharer:
             sharer_plan = sharer.plan.value if hasattr(sharer.plan, 'value') else str(sharer.plan)
 
+    if settings.STUDIO_UNLIMITED:
+        sharer_plan = "creator"
     plan_rank = {"free": 0, "pro": 1, "plus": 2, "creator": 3}.get(sharer_plan, 0)
 
     # Free users: strip captions, hashtags, trending audio
@@ -1055,7 +1136,7 @@ FREE_PLAN_PARAMS = {"Hook & Opening", "Retention & Pacing"}
 
 
 def _build_chat_system_prompt(analysis_data: Optional[dict], user_plan: str = "free") -> str:
-    base = """You are ARIA -- Prysm's AI creative strategist for Instagram Reels creators. You live inside Prysm (theprysm.io), an AI-powered Reels analysis platform.
+    base = """You are ARIA -- Prysm's AI creative strategist for Instagram Reels creators. You live inside Prysm, an AI-powered Reels analysis platform.
 
 ## What Prysm Does
 Prysm analyses Instagram Reels using advanced AI and scores them across 10 parameters:
@@ -1128,7 +1209,7 @@ Weights are empirically derived from 115 real Instagram Reels. Comedy weights Tr
             "You must ONLY discuss those two parameters. "
             "If they ask about ANY other parameter (Audio & Music, Visual Quality & Originality, Trend Alignment, Shareability, Call to Action, On-Screen Text, Save Potential, Replay Value) — "
             "do NOT reveal the score, diagnosis, or fix. Instead say: \"That parameter is part of the full breakdown, which is available on the Pro plan. "
-            "Upgrade at theprysm.io to unlock all 10 parameters and the complete fix list.\" "
+            "Upgrade your plan to unlock all 10 parameters and the complete fix list.\" "
             "Do not hint at what the score might be. Do not give partial advice that reveals the gated content."
         )
     else:
@@ -1290,6 +1371,9 @@ def _generate_suggestions(analysis_data: Optional[dict], user_plan: str = "free"
     return suggestions[:4]
 
 
+CHAT_FRIENDLY_FAILURE = "Sorry, I couldn't reach my brain just now. Please try again in a moment."
+
+
 @router.post("/chat")
 async def chat_with_analysis(
     request: ChatRequest,
@@ -1324,15 +1408,15 @@ async def chat_with_analysis(
     if not current_user:
         raise HTTPException(status_code=401, detail="Login required to chat.")
 
-    # Credit check — must have credits to send a message
-    if current_user.credits <= 0:
+    # Credit check — must have credits to send a message (STUDIO_UNLIMITED: no credits, no gate)
+    if not settings.STUDIO_UNLIMITED and current_user.credits <= 0:
         raise HTTPException(
             status_code=402,
             detail="out_of_credits",
         )
 
     # If no messages, return suggestions
-    _plan_for_suggestions = current_user.plan.value if hasattr(current_user.plan, "value") else str(current_user.plan)
+    _plan_for_suggestions = "creator" if settings.STUDIO_UNLIMITED else (current_user.plan.value if hasattr(current_user.plan, "value") else str(current_user.plan))
     if not messages:
         return {"suggestions": _generate_suggestions(analysis_data, _plan_for_suggestions)}
 
@@ -1391,26 +1475,56 @@ async def chat_with_analysis(
             resolved_session_id = new_session.id
 
     # -- Stream response from Claude -------------------------------------------
-    user_plan = current_user.plan.value if hasattr(current_user.plan, "value") else str(current_user.plan)
+    user_plan = "creator" if settings.STUDIO_UNLIMITED else (current_user.plan.value if hasattr(current_user.plan, "value") else str(current_user.plan))
     system_prompt = _build_chat_system_prompt(analysis_data, user_plan)
-    client = _get_chat_client()
+    client = _get_chat_client()  # AI_PROVIDER=meta: the Muse Spark shim (same interface), otherwise the Anthropic client
 
     async def generate():
+        import logging  # (a later inline import in this function makes `logging` local, so import it up front)
         full_response = ""
+        usage_in = usage_out = 0
+        msg_cost_usd = None  # None: priced below from the baseline token prices
         try:
             # Send immediate heartbeat so proxies (Railway/Vercel) don't timeout before first token
             yield ": ping\n\n"
-            async with client.messages.stream(
-                model="claude-sonnet-4-6",
-                max_tokens=1024,
-                system=system_prompt,
-                messages=[{"role": m["role"], "content": m["content"]} for m in messages],
-            ) as stream:
-                async for text in stream.text_stream:
-                    full_response += text
-                    yield f"data: {json.dumps({'delta': text, 'session_id': str(resolved_session_id)})}\n\n"
+            if settings.META_MODE:
+                from app.studio import safety
+                from app.studio.safety import limits_from_settings
+                from app.core.cache import redis_client as _cr
+                try:
+                    await safety.check_daily_cap(_cr, limits_from_settings(settings))
+                except safety.LimitExceeded as limit:
+                    # a friendly in-chat message, not an HTTP error
+                    yield f"data: {json.dumps({'delta': limit.message, 'session_id': str(resolved_session_id)})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+                except Exception:
+                    pass  # Redis trouble must not stop the chat
+            try:
+                async with client.messages.stream(
+                    model="claude-sonnet-4-6",  # mapped to Muse Spark by the shim when AI_PROVIDER=meta
+                    max_tokens=1024,
+                    system=system_prompt,
+                    messages=[{"role": m["role"], "content": m["content"]} for m in messages],
+                ) as stream:
+                    async for text in stream.text_stream:
+                        full_response += text
+                        yield f"data: {json.dumps({'delta': text, 'session_id': str(resolved_session_id)})}\n\n"
 
-            final_message = await stream.get_final_message()
+                final_message = await stream.get_final_message()
+            except Exception as chat_err:
+                if not settings.META_MODE:
+                    raise
+                # Meta failure: a friendly message in the chat, never a 500
+                logging.getLogger(__name__).warning(f"[Chat] Spark call failed: {chat_err}")
+                if not full_response:
+                    yield f"data: {json.dumps({'delta': CHAT_FRIENDLY_FAILURE, 'session_id': str(resolved_session_id)})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+            if final_message.usage:
+                usage_in, usage_out = final_message.usage.input_tokens, final_message.usage.output_tokens
+            if settings.META_MODE:
+                msg_cost_usd = getattr(final_message, "cost_usd", None)
 
             # -- Persist messages + deduct credits in a fresh session ----------
             from app.core.database import AsyncSessionLocal
@@ -1424,9 +1538,7 @@ async def chat_with_analysis(
                     content=user_content,
                 ))
                 # Save assistant message
-                tokens_used = 0
-                if final_message.usage:
-                    tokens_used = final_message.usage.input_tokens + final_message.usage.output_tokens
+                tokens_used = usage_in + usage_out
                 fresh_db.add(ChatMessage(
                     session_id=resolved_session_id,
                     role="assistant",
@@ -1441,19 +1553,17 @@ async def chat_with_analysis(
 
                 # Deduct credits — 1 credit = ₹3 = $0.03181  →  credits = usd * 31.44
                 CREDITS_PER_USD = 31.44
-                msg_cost_usd = 0.0
-                if final_message.usage:
-                    input_tokens = final_message.usage.input_tokens
-                    output_tokens = final_message.usage.output_tokens
-                    msg_cost_usd = round((input_tokens * 3.0 + output_tokens * 15.0) / 1_000_000, 6)
+                if msg_cost_usd is None:
+                    msg_cost_usd = round((usage_in * 3.0 + usage_out * 15.0) / 1_000_000, 6)
+                if usage_in or usage_out:
                     credits_used = round(msg_cost_usd * CREDITS_PER_USD, 1)
-                    if credits_used > 0:
+                    if credits_used > 0 and not settings.STUDIO_UNLIMITED:
                         fresh_user = await fresh_db.get(UserModel, current_user.id)
                         if fresh_user:
                             fresh_user.credits = round(max(0.0, fresh_user.credits - credits_used), 1)
                         import logging
                         logging.getLogger(__name__).info(
-                            f"[Chat] {input_tokens} in + {output_tokens} out = ${msg_cost_usd:.6f} = {credits_used} credits"
+                            f"[Chat] {usage_in} in + {usage_out} out = ${msg_cost_usd:.6f} = {credits_used} credits"
                         )
 
                 # Persist cost on the assistant message row
@@ -1469,6 +1579,12 @@ async def chat_with_analysis(
                     if asst_msg:
                         asst_msg.cost_usd = msg_cost_usd
                 await fresh_db.commit()
+
+            if settings.META_MODE:
+                try:  # the chat's real cost counts against the daily spend cap
+                    await safety.record_spend(_cr, float(msg_cost_usd or 0.0))
+                except Exception as spend_err:
+                    logging.getLogger(__name__).warning(f"[Chat] Could not record chat spend: {spend_err}")
 
             yield "data: [DONE]\n\n"
         except Exception as e:
@@ -1610,7 +1726,9 @@ async def get_edited_video_url(
     if not rec.edited_video_key:
         raise HTTPException(status_code=404, detail="No edited video available for this analysis.")
 
-    from app.services.r2_service import get_presigned_url
+    from app.services.r2_service import get_presigned_url, _ready as _r2_ready
+    if not _r2_ready():
+        raise HTTPException(status_code=503, detail="Edited-video downloads are not available in this deployment.")
     url = get_presigned_url(rec.edited_video_key, expiry_seconds=86400)
     if not url:
         raise HTTPException(status_code=500, detail="Could not generate download link.")

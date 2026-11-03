@@ -26,12 +26,15 @@ async def get_creator_profile(
     db: AsyncSession = Depends(get_db),
 ):
     """Full aggregated creator intelligence profile."""
+    from app.core.config import settings
+    from app.studio.safety import unlimited_view
     ctx = await get_creator_context(str(current_user.id), db)
+    plan, credits = unlimited_view(settings.STUDIO_UNLIMITED, current_user.plan, current_user.credits)
     return {
         "user_id": str(current_user.id),
         "username": current_user.username,
-        "plan": current_user.plan,
-        "credits": current_user.credits,
+        "plan": plan,
+        "credits": credits,
         **ctx,
     }
 

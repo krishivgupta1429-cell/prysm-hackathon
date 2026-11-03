@@ -190,6 +190,16 @@ def _is_disposable_email(email: str) -> bool:
 async def register(body: RegisterRequest, request: Request, db: AsyncSession = Depends(get_db)):
     ip = _get_ip(request)
 
+    if settings.META_MODE:
+        from app.studio import safety
+        from app.studio.safety import limits_from_settings
+        try:
+            await safety.check_register(redis_client, ip, limits_from_settings(settings))
+        except safety.LimitExceeded as limit:
+            raise HTTPException(status_code=limit.status_code, detail=limit.message)
+        except Exception as limit_err:  # Redis trouble must not block sign-ups
+            auth_logger.warning("Sign-up limit check failed", extra={"error": str(limit_err)})
+
     # Block disposable/temp email domains
     if _is_disposable_email(body.email):
         raise HTTPException(status_code=400, detail="Please use a permanent email address to register.")
@@ -222,8 +232,11 @@ async def register(body: RegisterRequest, request: Request, db: AsyncSession = D
         "x_ip": ip, "x_user_id": str(user.id), "x_email": body.email,
     })
 
-    # Send verification email if Brevo is configured, otherwise auto-verify
-    if settings.BREVO_API_KEY:
+    # Send verification email if Brevo is configured, otherwise auto-verify (DEMO_AUTO_VERIFY always verifies)
+    if settings.DEMO_AUTO_VERIFY:
+        user.is_verified = True
+        auth_logger.info("DEMO_AUTO_VERIFY — verified user at registration", extra={"x_user_id": str(user.id)})
+    elif settings.BREVO_API_KEY:
         token = secrets.token_urlsafe(32)
         try:
             await redis_client.setex(
@@ -323,13 +336,15 @@ async def refresh_token(body: RefreshRequest, request: Request, db: AsyncSession
 
 @router.get("/me", response_model=UserResponse)
 async def get_profile(current_user: User = Depends(get_current_user)):
+    from app.studio.safety import unlimited_view
+    plan, credits = unlimited_view(settings.STUDIO_UNLIMITED, current_user.plan, round(current_user.credits, 1))
     return UserResponse(
         id=str(current_user.id),
         email=current_user.email,
         username=current_user.username,
         full_name=current_user.full_name,
-        plan=current_user.plan,
-        credits=round(current_user.credits, 1),
+        plan=plan,
+        credits=credits,
         is_verified=current_user.is_verified,
         auth_provider=getattr(current_user, "auth_provider", None) or "email",
         created_at=current_user.created_at.isoformat(),

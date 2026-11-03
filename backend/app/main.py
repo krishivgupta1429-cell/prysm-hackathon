@@ -108,8 +108,8 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"Founder promotion skipped: {e}")
 
-        # One-time manual promotions
-        _promote_emails = ["theprysm77@gmail.com"]
+        # One-time manual promotions: emails come from PROMOTE_EMAILS (empty by default), never hardcoded
+        _promote_emails = [e.strip().lower() for e in settings.PROMOTE_EMAILS.split(",") if e.strip()]
         for _email in _promote_emails:
             try:
                 await conn.execute(text("""
@@ -161,21 +161,25 @@ app = FastAPI(
 
 # ── Middleware (outermost first) ───────────────────────────────────────────────
 
-# Trusted hosts — only allow requests to known hostnames
-if is_prod:
+# Trusted hosts — in production, only answer to the hostnames listed in TRUSTED_HOSTS (comma-separated)
+_trusted_hosts = [h.strip() for h in settings.TRUSTED_HOSTS.split(",") if h.strip()]
+if is_prod and _trusted_hosts:
     app.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=[
-            "YOUR-BACKEND-URL.example.com",
-            "*.railway.app",
-            "localhost",
-        ],
+        allowed_hosts=[*_trusted_hosts, "localhost"],
     )
 
 # ── Middleware stack ──────────────────────────────────────────────────────────
 # Order matters: last added = first to execute.
 # CORSMiddleware MUST be last (outermost) so CORS headers are always present,
 # even when inner middleware or route handlers crash.
+
+# Allowed origins: ALLOWED_ORIGINS (a JSON list, local dev by default) plus CORS_ORIGINS (comma-separated) and FRONTEND_URL
+_cors_origins = list(dict.fromkeys(
+    [o.rstrip("/") for o in settings.ALLOWED_ORIGINS]
+    + [o.strip().rstrip("/") for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+    + ([settings.FRONTEND_URL.rstrip("/")] if settings.FRONTEND_URL else [])
+))
 
 app.add_middleware(CorrelationIDMiddleware)
 app.add_middleware(AbuseProtectionMiddleware)
@@ -184,14 +188,7 @@ app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(SSESafeGZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "https://theprysm.io",
-        "https://www.theprysm.io",
-        "https://prysm-app-eight.vercel.app",
-        "https://prysm-app-git-main-krishivgupta1429-9393s-projects.vercel.app",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
@@ -224,13 +221,15 @@ async def add_security_headers(request: Request, call_next):
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     if is_prod:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        # Razorpay's hosts are only allowed when payments are configured; CSP_CONNECT_SRC adds the backend URL etc.
+        _pay = bool(settings.RAZORPAY_KEY_ID)
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://checkout.razorpay.com; "
+            f"script-src 'self' 'unsafe-inline'{' https://checkout.razorpay.com' if _pay else ''}; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: blob: https:; "
-            "connect-src 'self' https://YOUR-BACKEND-URL.example.com https://api.razorpay.com https://lux-gateway.razorpay.com; "
-            "frame-src https://api.razorpay.com https://checkout.razorpay.com; "
+            f"connect-src 'self' {settings.CSP_CONNECT_SRC}{' https://api.razorpay.com https://lux-gateway.razorpay.com' if _pay else ''}; "
+            f"frame-src {'https://api.razorpay.com https://checkout.razorpay.com' if _pay else chr(39) + 'none' + chr(39)}; "
             "font-src 'self' data:; "
             "object-src 'none'; "
             "base-uri 'self'"
