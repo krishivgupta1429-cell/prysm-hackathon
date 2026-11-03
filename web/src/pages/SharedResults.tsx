@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { parseMarkedSteps } from '@/studio/steps'
 import { useParams } from 'react-router-dom'
 import {
   Zap, Eye, Music, Scissors, Type, MousePointerClick,
@@ -119,6 +120,10 @@ function formatNumber(n: number): string {
 
 function parseSteps(text: string): string[] {
   if (!text) return []
+
+  // Hackathon: "Step N —" markers (the backend's canonical format): split only at the markers
+  const marked = parseMarkedSteps(text)
+  if (marked) return marked
 
   const numberedParts = text.split(/(?:^|\s)\d+[\.\)]\s+/).map(s => s.trim()).filter(Boolean)
   if (numberedParts.length >= 2) {

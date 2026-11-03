@@ -27,6 +27,8 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from app.studio.llm_switch import anthropic  # the anthropic package, or Muse Spark behind the same interface (AI_PROVIDER=meta)
 from app.studio import coach_style as _coach_style  # hackathon: COACH_STYLE addendum (off by default)
+from app.studio import step_quality as _step_quality  # hackathon: step-list check + regeneration retry
+from app.studio import steps as _steps  # hackathon: quote-aware step splitting
 from app.studio import quality as _quality  # hackathon: cut-off text check (logging only)
 from app.studio.score_math import normalise_scored_weights, overall_and_predicted  # hackathon: overall over the six scored params, weights normalised to 1
 
@@ -37,6 +39,9 @@ from app.services.aesthetics_service import score_frames, build_aesthetics_conte
 from app.services.engagement_service import predict_engagement, build_engagement_context
 
 logger = logging.getLogger(__name__)
+
+
+_MIN_STEPS = 3  # hackathon: minimum steps per parameter that the validator may leave
 
 
 def _validate_suggestions(result: dict, whisper_data: dict, vision_data: dict, intent: str) -> dict:
@@ -103,12 +108,14 @@ def _validate_suggestions(result: dict, whisper_data: dict, vision_data: dict, i
         if not how:
             continue
 
-        # Split into individual steps — handle "Step N —", numbered lists, sentences
-        step_parts = re.split(r'(?:^|\s)Step\s+\d+\s*[—\-:]\s*|(?<=[.!?])\s+(?=[A-Z])', how, flags=re.IGNORECASE)
-        step_parts = [s.strip() for s in step_parts if s.strip() and len(s.strip()) > 15]
+        # Split into individual steps — handle "Step N —", numbered lists, sentences.
+        # Hackathon: quote-aware (app/studio/steps.py): a step starts only at a "Step N" marker, and a ready-to-say quote is never split at a
+        # period or an ellipsis inside it (the baseline split at every ". " + capital letter, which broke quotes and turned one step into two).
+        step_parts = [s.strip() for s in _steps.split_steps(how) if s.strip() and len(s.strip()) > 8]
 
         validated_steps = []
-        for step in step_parts:
+        _dropped_steps = []
+        for _step_idx, step in enumerate(step_parts):
             step_lower = step.lower()
             step_tokens = set(tok for tok in re.findall(r'\w+', step_lower) if len(tok) > 3)
 
@@ -144,7 +151,7 @@ def _validate_suggestions(result: dict, whisper_data: dict, vision_data: dict, i
                 if rehook_seg:
                     step = (
                         f"A mid-video re-hook already exists in your voiceover at "
-                        f"{rehook_seg['start']:.0f}s ('{rehook_seg['text'].strip()[:60]}'). "
+                        f"{rehook_seg['start']:.0f}s ('{_steps.shorten_quote(rehook_seg['text'])}'). "
                         f"Rather than adding another, strengthen this moment visually: "
                         f"cut to a new angle, add a quick zoom, or flash a text beat at exactly "
                         f"{rehook_seg['start']:.0f}s to amplify the re-hook that's already there."
@@ -162,7 +169,7 @@ def _validate_suggestions(result: dict, whisper_data: dict, vision_data: dict, i
                      "place text", "put text", "write", "add the text", "add on-screen"))
                 if suggests_text_add and existing_text:
                     step = (
-                        f"On-screen text already exists at {ts_str}s ('{existing_text[:50]}'). "
+                        f"On-screen text already exists at {ts_str}s ('{_steps.shorten_quote(existing_text, 100)}'). "
                         f"Instead of adding another overlay, improve what's already there: "
                         f"increase the font size for mobile readability, reposition it to the "
                         f"upper third away from Instagram's UI, or make the wording punchier."
@@ -171,6 +178,7 @@ def _validate_suggestions(result: dict, whisper_data: dict, vision_data: dict, i
                     break
 
             # ── Check 4: Timestamp deduplication across parameters ────────────
+            _step_before_dedup = step
             for ts_str in ts_mentions:
                 ts_key = f"{int(float(ts_str))}s"
                 if ts_key in claimed_timestamps:
@@ -188,13 +196,19 @@ def _validate_suggestions(result: dict, whisper_data: dict, vision_data: dict, i
                     claimed_timestamps[ts_key] = param_name
 
             if step:
-                validated_steps.append(step)
+                validated_steps.append((_step_idx, step))
+            elif _step_before_dedup:
+                _dropped_steps.append((_step_idx, _step_before_dedup))
+
+        # Hackathon: the de-duplication above may not leave a parameter with fewer than the minimum number of steps (3):
+        # the earliest removed steps come back (in their original order).
+        while len(validated_steps) < _MIN_STEPS and _dropped_steps:
+            validated_steps.append(_dropped_steps.pop(0))
+            validated_steps.sort(key=lambda t: t[0])
 
         if validated_steps:
             # Reconstruct howToDoIt with explicit Step N — labels
-            param["howToDoIt"] = " ".join(
-                f"Step {i + 1} — {s}" for i, s in enumerate(validated_steps)
-            )
+            param["howToDoIt"] = _steps.format_steps([s for _, s in validated_steps])
 
     return result
 
@@ -2798,6 +2812,27 @@ async def run_full_analysis(
             result = _validate_suggestions(result, whisper_data, vision_data, intent)
         except Exception as _ve:
             logger.warning(f"[Validate] Suggestion validation failed (non-fatal): {_ve}")
+
+        if settings.META_MODE:
+            # Hackathon: one canonical "Step N — ..." format, and a regeneration retry for any parameter whose steps fail the check
+            # (fewer than 3 steps, fallback line first, no ready-to-say line where one is needed). Never fails the analysis.
+            try:
+                _step_quality.normalise_all(result)
+                if settings.STEP_REGENERATE:
+                    async def _regen_call(_prompt, _max_tokens):
+                        return await _claude_with_retry(client, model="claude-sonnet-4-6", max_tokens=_max_tokens,
+                                                        messages=[{"role": "user", "content": _prompt}])
+                    _rs = await _step_quality.regenerate_failing(
+                        result, call=_regen_call, transcript=whisper_data.get("transcript") or "", niche=niche, platform=platform, intent=intent)
+                    if _rs.calls:
+                        _scoring_usage["input_tokens"] += _rs.tokens_in
+                        _scoring_usage["output_tokens"] += _rs.tokens_out
+                        _scoring_usage["reasoning_tokens"] = _scoring_usage.get("reasoning_tokens", 0) + _rs.reasoning_tokens
+                        _scoring_usage["cost_usd"] = _scoring_usage.get("cost_usd", 0.0) + _rs.cost_usd
+                        _scoring_usage["calls"] = _scoring_usage.get("calls", 2) + _rs.calls
+                        logger.info(f"[Steps] regenerated {_rs.regenerated}; still failing {_rs.still_failing} ({_rs.calls} calls, ${_rs.cost_usd:.4f})")
+            except Exception as _se:
+                logger.warning(f"[Steps] step check failed (non-fatal): {_se}")
 
         if settings.META_MODE:
             try:  # hackathon: surface any cut-off text in the log (the shim already retries replies cut off by the token budget)

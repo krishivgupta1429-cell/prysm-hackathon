@@ -30,11 +30,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("inputs")
     ap.add_argument("--model", default="muse-spark-1.3", help="muse-spark-1.3 (default) or muse-wonder-1.0")
-    ap.add_argument("--style", type=int, default=0, help="1 = append the coach style addendum")
+    ap.add_argument("--style", type=int, default=1, help="1 (default) = append the coach style addendum, 0 = baseline prompts only")
+    ap.add_argument("--no-regen", action="store_true", help="skip the regeneration retry for parameters that fail the step check")
     ap.add_argument("--out", help="write {result, raw, stats} here")
     a = ap.parse_args()
     from app.studio.rescore import load_inputs, rescore
-    out = asyncio.run(rescore(load_inputs(CWD / a.inputs), model=a.model, style=bool(a.style)))
+    out = asyncio.run(rescore(load_inputs(CWD / a.inputs), model=a.model, style=bool(a.style), regen=not a.no_regen))
     if a.out:
         (CWD / a.out).write_text(json.dumps(out, ensure_ascii=False, indent=1))
     print(json.dumps(out["stats"]["metrics"], indent=1))

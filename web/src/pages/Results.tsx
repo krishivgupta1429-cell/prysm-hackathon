@@ -12,6 +12,7 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { STUDIO_MODE } from '@/lib/config'
 import CostPanel from '@/studio/CostPanel'
+import { parseMarkedSteps } from '@/studio/steps'
 import ViewerBehaviourCard from '@/studio/ViewerBehaviourCard'
 
 interface Parameter {
@@ -156,6 +157,10 @@ function cardBorderColor(score: number) {
 
 function parseSteps(text: string): string[] {
   if (!text) return []
+
+  // 0) Hackathon: "Step N —" markers (the backend's canonical format): split only at the markers
+  const marked = parseMarkedSteps(text)
+  if (marked) return marked
 
   // Each step must be a complete sentence — starting with a capital letter,
   // ending with terminal punctuation. Splitting mid-sentence (at commas,

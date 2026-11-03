@@ -60,11 +60,11 @@ def _parse(raw: str, label: str) -> tuple:
         return json.loads(repair_json(text, return_objects=False)), False
 
 
-async def rescore(inp: dict, *, model: str, style: bool) -> dict:
+async def rescore(inp: dict, *, model: str, style: bool, regen: bool = True) -> dict:
     """Run call A and call B again. Returns {"result", "raw", "stats"}; `result` is shaped like the pipeline's parameters block."""
     from app.core.config import settings
     from app.services.prysm_analyse_service import _claude_with_retry, _validate_suggestions
-    from app.studio import coach_style, meta_llm_shim as shim, quality
+    from app.studio import coach_style, meta_llm_shim as shim, quality, step_quality
     from app.studio.score_math import overall_and_predicted
     if not settings.META_MODE:
         raise RuntimeError("set AI_PROVIDER=meta before importing the app (the replay goes through the Muse shim)")
@@ -123,6 +123,20 @@ async def rescore(inp: dict, *, model: str, style: bool) -> dict:
     from app.core.config import ADVISORY_PARAMETERS
     for p in result["parameters"]:
         p["advisory"] = p.get("name") in ADVISORY_PARAMETERS
+    # the pipeline's step handling: one canonical format, then a regeneration retry for any parameter that fails the step check
+    step_quality.normalise_all(result)
+    stats["failing_before_regen"] = [p.get("name") for p, _ in step_quality.failing(result)]
+    stats["regen"] = {"calls": 0, "regenerated": [], "still_failing": [], "cost_usd": 0.0}
+    if regen:
+        async def regen_call(prompt, max_tokens):
+            return await _claude_with_retry(client, model=model, max_tokens=max_tokens, messages=[{"role": "user", "content": prompt}])
+        rs = await step_quality.regenerate_failing(result, call=regen_call, transcript=(inp.get("whisper_data") or {}).get("transcript") or "",
+                                                   niche=inp.get("niche", ""), platform=inp.get("platform", ""), intent=inp.get("intent", "my_video"))
+        stats["regen"] = {"calls": rs.calls, "regenerated": rs.regenerated, "still_failing": rs.still_failing, "cost_usd": rs.cost_usd}
+        stats["tokens_in"] += rs.tokens_in
+        stats["tokens_out"] += rs.tokens_out
+        stats["reasoning_tokens"] += rs.reasoning_tokens
+        stats["cost_usd"] = round(stats["cost_usd"] + rs.cost_usd, 4)
     result["overallScore"], result["predictedScoreAfterFixes"] = overall_and_predicted(result["parameters"], inp["scored_weights"])
     stats["metrics"] = metrics(result, inp, stats)
     return {"result": result, "raw": raw, "stats": stats}
