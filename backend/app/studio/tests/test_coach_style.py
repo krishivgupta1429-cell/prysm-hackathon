@@ -22,9 +22,17 @@ def build(**extra):
     return build_scoring_prompts(**kw)
 
 
-def test_the_flag_defaults_to_off_and_the_addendum_is_empty():
-    assert Settings.model_fields["COACH_STYLE"].default is False and Settings.model_fields["DEBUG_SAVE_INPUTS"].default is False
+def test_the_style_is_on_by_default_in_meta_mode_and_never_in_baseline_mode(monkeypatch):
+    from app.core.config import settings
+    assert Settings.model_fields["COACH_STYLE"].default is True and Settings.model_fields["DEBUG_SAVE_INPUTS"].default is False
     assert coach_style.addendum(False) == ""
+    monkeypatch.setattr(settings, "AI_PROVIDER", "meta")
+    assert coach_style.addendum() == coach_style.addendum(True) != ""
+    monkeypatch.setattr(settings, "COACH_STYLE", False)
+    assert coach_style.addendum() == ""                      # COACH_STYLE=0 turns it off
+    monkeypatch.setattr(settings, "COACH_STYLE", True)
+    monkeypatch.setattr(settings, "AI_PROVIDER", "")
+    assert coach_style.addendum() == ""                      # without AI_PROVIDER=meta the prompts are the baseline's
 
 
 def test_without_the_addendum_the_prompts_are_the_baseline_prompts():
@@ -46,14 +54,6 @@ def test_the_style_guide_is_a_de_identified_pattern_guide():
         assert must in t, must
     for banned in ["theprysm", "krishiv", "Mitran", "saree", "Jazzy"]:
         assert banned.lower() not in t.lower()
-
-
-def test_style_stays_off_unless_enabled_in_the_settings(monkeypatch):
-    from app.core.config import settings
-    monkeypatch.setattr(settings, "COACH_STYLE", True)
-    assert coach_style.addendum() == coach_style.addendum(True) != ""
-    monkeypatch.setattr(settings, "COACH_STYLE", False)
-    assert coach_style.addendum() == ""
 
 
 # ---------------------------------------------------------------- replay
@@ -91,7 +91,7 @@ def fake_post(monkeypatch):
 
 
 def test_replay_runs_only_the_two_scoring_calls_with_the_chosen_model(fake_post):
-    out = asyncio.run(rescore.rescore(saved_inputs(), model="muse-wonder-1.0", style=False))
+    out = asyncio.run(rescore.rescore(saved_inputs(), model="muse-wonder-1.0", style=False, regen=False))
     assert len(fake_post) == 2 and {b["model"] for b in fake_post} == {"muse-wonder-1.0"}
     assert all(b["messages"][-1]["content"] in ("PROMPT A", "PROMPT B") for b in fake_post)
     st = out["stats"]
@@ -101,16 +101,16 @@ def test_replay_runs_only_the_two_scoring_calls_with_the_chosen_model(fake_post)
 
 def test_replay_with_style_appends_the_addendum_and_strips_the_one_the_saved_run_used(fake_post):
     add = coach_style.addendum(True)
-    asyncio.run(rescore.rescore(saved_inputs(), model="muse-spark-1.3", style=True))
+    asyncio.run(rescore.rescore(saved_inputs(), model="muse-spark-1.3", style=True, regen=False))
     assert all(b["messages"][-1]["content"].endswith(add) for b in fake_post)
     fake_post.clear()
-    asyncio.run(rescore.rescore(saved_inputs(addendum=add), model="muse-spark-1.3", style=False))   # saved WITH style, replayed without
+    asyncio.run(rescore.rescore(saved_inputs(addendum=add), model="muse-spark-1.3", style=False, regen=False))   # saved WITH style, replayed without
     assert [b["messages"][-1]["content"] for b in fake_post] == ["PROMPT A", "PROMPT B"] or \
         sorted(b["messages"][-1]["content"] for b in fake_post) == ["PROMPT A", "PROMPT B"]
 
 
 def test_replay_metrics(fake_post):
-    m = asyncio.run(rescore.rescore(saved_inputs(), model="muse-spark-1.3", style=False))["stats"]["metrics"]
+    m = asyncio.run(rescore.rescore(saved_inputs(), model="muse-spark-1.3", style=False, regen=False))["stats"]["metrics"]
     assert m["valid_json"] is True and m["truncated_fields"] == 0 and m["scored_with_fewer_than_3_steps"] == 0
     assert m["transcript_quotes"] == 5 and m["advisory_with_ready_wording"] == "4/4" and m["overall"] == 70
 

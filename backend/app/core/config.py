@@ -15,6 +15,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",  # the Meta layer's own variables (META_API_KEY, ...) live in the same .env
+        env_ignore_empty=True,  # hackathon: a name with no value in .env (as in .env.example) means "not set", not a parse error
     )
 
     # ── App ───────────────────────────────────────────────────────────────────
@@ -32,7 +33,8 @@ class Settings(BaseSettings):
     AI_PROVIDER: str = ""                      # "meta": every Claude call is served by Muse Spark through app/studio/meta_llm_shim.py
     STUDIO_EXPOSE_COST: bool = False           # local testing: the owner may fetch the per-analysis cost breakdown (the founder email always may); never set in a public deployment
     DEV_BAKEOFF: bool = False                  # local only: mount /dev/bakeoff (saved blind bake-off variants for the founder's review page); never set in a deployment
-    COACH_STYLE: bool = False                  # hackathon: append app/studio/coach_style.md to the two scoring prompts as an addendum (default off)
+    COACH_STYLE: bool = True                   # hackathon: append app/studio/coach_style.md to the two scoring prompts as an addendum (default on; only used with AI_PROVIDER=meta; COACH_STYLE=0 turns it off)
+    STEP_REGENERATE: bool = True               # hackathon: regenerate the steps of any parameter that fails the step check (fewer than 3 steps, fallback first, no ready-to-say line); STEP_REGENERATE=0 turns it off
     DEBUG_SAVE_INPUTS: bool = False            # hackathon: save the exact inputs of the scoring calls once per analysis (samples/_local/scoring_inputs) for scripts/rescore.py
     AUTO_EDIT_ENABLED: bool = True             # the baseline auto-edit + R2 upload step after an analysis; the hackathon env switches it off (AUTO_EDIT_ENABLED=0)
     STUDIO_MAX_CONCURRENT: int = 2             # analyses running at once across all processes (safety net)

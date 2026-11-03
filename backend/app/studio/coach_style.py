@@ -16,8 +16,8 @@ def style_text() -> str:
 
 
 def addendum(enabled: bool | None = None) -> str:
-    """"\\n\\n" + the style guide when enabled (default: settings.COACH_STYLE), else the empty string."""
+    """"\\n\\n" + the style guide when enabled (default: settings.COACH_STYLE, on, and only in meta mode), else the empty string."""
     if enabled is None:
         from app.core.config import settings
-        enabled = bool(settings.COACH_STYLE)
+        enabled = bool(settings.COACH_STYLE and settings.META_MODE)
     return ("\n\n" + style_text()) if enabled else ""
