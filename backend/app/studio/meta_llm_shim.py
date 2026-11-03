@@ -15,8 +15,9 @@ Translation (all measured against the live API):
   - Anthropic content blocks -> OpenAI-compatible ones: {"type":"text"} stays, a base64 {"type":"image"} becomes an
     image_url data URL. `system` becomes a system message.
   - Spark spends reasoning tokens inside max_tokens (a 30-token budget returned empty content), so the shim adds
-    META_REASONING_HEADROOM (default 6000) to every max_tokens and, if a reply still comes back empty because it ran
-    out of budget, retries once with double the headroom. META_REASONING_EFFORT (optional) lowers the reasoning; streamed chat (ARIA) defaults to low.
+    META_REASONING_HEADROOM (default 6000) to every max_tokens. If a reply is still cut off by the budget (empty, or JSON that
+    stops mid-sentence: finish_reason "length"), it is retried up to twice with doubled headroom and the wasted attempts stay
+    in the usage and cost. META_REASONING_EFFORT (optional) lowers the reasoning; streamed chat (ARIA) defaults to low.
   - Images per request: Spark accepted 150 images in one request in our probe (counting accuracy dropped past ~48).
     The original pipeline sends at most 18. META_MAX_IMAGES_PER_REQUEST (default 48) caps a request; beyond it the
     frames are thinned evenly (first and last kept) and a warning is logged, because one answer cannot be stitched
@@ -44,6 +45,7 @@ log = logging.getLogger(__name__)
 DEFAULT_MODEL = "muse-spark-1.3"
 DEFAULT_HEADROOM = 6000
 DEFAULT_MAX_IMAGES = 48
+MAX_ATTEMPTS = 3  # the first call plus up to two retries with doubled headroom when the reply is cut off by the token budget
 
 
 # ------------------------------------------------------------------ exceptions (the subset the pipeline catches)
@@ -231,7 +233,9 @@ class _Messages:
         owner = self._owner
         target = meta_model_for(model)
         headroom = reasoning_headroom()
-        for attempt in (1, 2):
+        spent = Usage()
+        spent_cost, spent_reasoning = 0.0, 0
+        for attempt in range(1, MAX_ATTEMPTS + 1):
             body = build_body(target, max_tokens, messages, system, temperature, headroom)
             try:
                 reply = await asyncio.to_thread(owner._post, body)
@@ -239,10 +243,21 @@ class _Messages:
                 raise APIStatusError(str(e), 401) from None
             except MetaError as e:
                 raise _map_error(e) from None
-            if reply.content[0].text.strip() or attempt == 2 or reply.stop_reason != "max_tokens":
-                return reply
-            headroom *= 2  # the reasoning ate the whole budget: try once more with twice the room
-            log.warning("[MetaShim] empty reply (reasoning used the budget); retrying with headroom %d", headroom)
+            # The answer is cut off when the hidden reasoning ate the budget: either nothing came back, or the JSON stops
+            # mid-sentence (finish_reason "length"). Both are retried with more room; the wasted attempt stays in the cost.
+            if reply.stop_reason != "max_tokens" or attempt == MAX_ATTEMPTS:
+                break
+            spent.input_tokens += reply.usage.input_tokens
+            spent.output_tokens += reply.usage.output_tokens
+            spent_cost += reply.cost_usd
+            spent_reasoning += reply.reasoning_tokens
+            headroom *= 2
+            log.warning("[MetaShim] reply cut off by the token budget (%d chars, %d reasoning tokens); retrying with headroom %d",
+                        len(reply.content[0].text), reply.reasoning_tokens, headroom)
+        if spent.input_tokens or spent.output_tokens:
+            reply.usage = Usage(reply.usage.input_tokens + spent.input_tokens, reply.usage.output_tokens + spent.output_tokens)
+            reply.cost_usd = round(reply.cost_usd + spent_cost, 6)
+            reply.reasoning_tokens += spent_reasoning
         return reply
 
     def stream(self, *, model: str, max_tokens: int = 1024, messages: list, system=None, temperature=None, **_ignored):

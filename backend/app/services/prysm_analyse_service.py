@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from app.studio.llm_switch import anthropic  # the anthropic package, or Muse Spark behind the same interface (AI_PROVIDER=meta)
+from app.studio import quality as _quality  # hackathon: cut-off text check (logging only)
 from app.studio.score_math import normalise_scored_weights, overall_and_predicted  # hackathon: overall over the six scored params, weights normalised to 1
 
 from app.core.config import settings, NICHE_WEIGHTS, DEFAULT_SCORED_WEIGHTS, ADVISORY_PARAMETERS, SCORED_PARAMETERS
@@ -2770,6 +2771,13 @@ async def run_full_analysis(
             result = _validate_suggestions(result, whisper_data, vision_data, intent)
         except Exception as _ve:
             logger.warning(f"[Validate] Suggestion validation failed (non-fatal): {_ve}")
+
+        if settings.META_MODE:
+            try:  # hackathon: surface any cut-off text in the log (the shim already retries replies cut off by the token budget)
+                for _pn, _pf, _tail in _quality.find_truncated(result):
+                    logger.warning(f"[Quality] possibly cut-off text in {_pn}.{_pf}: ...{_tail!r}")
+            except Exception:
+                pass
 
         # Tag each parameter as advisory or scored, and inject its weight
         _norm_weights = normalise_scored_weights(scored_weights)

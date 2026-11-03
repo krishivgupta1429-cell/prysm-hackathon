@@ -107,7 +107,7 @@ def test_create_returns_text_usage_and_retries_once_when_reasoning_ate_the_budge
 
     monkeypatch.setattr(client, "_post", post)
     reply = asyncio.run(client.messages.create(model="claude-sonnet-4-6", max_tokens=100, messages=[{"role": "user", "content": "x"}]))
-    assert reply.content[0].text == "hello" and reply.usage.input_tokens == 10 and reply.usage.output_tokens == 20
+    assert reply.content[0].text == "hello" and reply.usage.input_tokens == 20 and reply.usage.output_tokens == 40  # the wasted attempt is billed too
     assert calls == [100 + 6000, 100 + 12000]
 
 
