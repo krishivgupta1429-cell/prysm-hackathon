@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 The hidden budget safety net for the hackathon demo deployment, plus the "unlimited" view of an account.
 

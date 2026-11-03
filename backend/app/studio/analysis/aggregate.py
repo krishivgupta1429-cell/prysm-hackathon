@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Aggregation of repeated scoring runs (the analysis stage scores twice by default).
 

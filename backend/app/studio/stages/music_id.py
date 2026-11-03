@@ -1,4 +1,5 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work). Existing models and services, new integration:
+the models and vendors wrapped here existed before the hackathon; only this integration code is new.
 
 Music ID stage: ACRCloud identifies the track in 12-second windows of the reel's 16 kHz wav.
 

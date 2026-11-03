@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 ffmpeg/ffprobe media prep. The original video is only ever read, never modified.
 

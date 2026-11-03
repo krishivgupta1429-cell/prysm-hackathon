@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Offline tests (no network) for the creator inputs of the analysis: niche parsing, the baseline-style weight
 lookup, the creator-context evidence item (unverified, never evidence), description_fit validation, the

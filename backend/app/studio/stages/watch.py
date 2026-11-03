@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Watch stage: Muse Spark watches the native video and returns a structured JSON read of it
 (hook, timeline, weak moments, on-screen text, format, niche, CTA).

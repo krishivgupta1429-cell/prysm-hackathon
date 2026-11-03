@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Offline tests for the separation clean-ups and demo flags: DEMO_AUTO_VERIFY is off by default and, when on, verifies a new
 account at once; PROMOTE_EMAILS and the CORS/CSP settings default to nothing production-specific;

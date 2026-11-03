@@ -1,4 +1,4 @@
-// Hackathon-built (Meta Global AI Developer Hackathon).
+// Built during the Meta Global AI Developer Hackathon (new work).
 // The original analysis pipeline reports the real stage of a job in the `progress` field of /prysm/analyse/status/{job}.
 // These helpers turn that into labels and counts for the processing screen (only used when VITE_STUDIO_MODE=1).
 

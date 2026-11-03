@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Offline tests (no network, database or real Redis) for the hidden budget safety net and the unlimited view of an account: each safety-net
 limit (daily spend cap, one running analysis per user, hourly limit, sign-ups per IP, global concurrency) answers

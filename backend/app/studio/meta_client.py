@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Small httpx client for the Meta API (Muse Spark, Voice Transcribe, SAM 3.1), Groq Whisper and
 the Gemini REST API, with cost accounting. Blocking calls; the pipeline runs them with asyncio.to_thread.

@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 The overall score, computed in code and never by the model: the weighted mean of the 6 scored parameters
 using the niche weights, rounded to one decimal, plus the band. The 4 advisory parameters are shown but

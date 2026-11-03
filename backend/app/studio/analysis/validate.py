@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Validation of the model's scoring output, in plain code after the model call. Nothing the model says is
 trusted until it passes here:

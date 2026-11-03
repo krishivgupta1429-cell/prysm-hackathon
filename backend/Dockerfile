@@ -14,7 +14,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Prysm Studio engine (ANALYSIS_ENGINE=studio): modal client, librosa, ... (ffmpeg/ffprobe come from apt above)
+# Hackathon Meta layer (AI_PROVIDER=meta): Modal client and signal helpers (ffmpeg/ffprobe come from apt above)
 COPY requirements-studio.txt .
 RUN pip install --no-cache-dir -r requirements-studio.txt
 

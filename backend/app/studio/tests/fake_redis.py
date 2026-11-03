@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 A tiny in-memory stand-in for the async Redis client, with just the commands the Studio safety net uses.
 """

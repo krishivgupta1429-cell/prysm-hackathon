@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Offline test that the product is called "Prysm" everywhere a user, judge or reader sees it: no "Prysm" (any case, words
 separated by whitespace) in backend string literals (messages, prompts, email templates; docstrings and

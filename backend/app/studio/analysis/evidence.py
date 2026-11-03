@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Evidence pack: turns a report into a compact list of facts for the analysis model, hard-capped at about
 6,000 tokens (config.EVIDENCE_MAX_TOKENS). Facts only: no embeddings, no model opinions (hook ratings,

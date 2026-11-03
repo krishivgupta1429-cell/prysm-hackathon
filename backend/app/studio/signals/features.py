@@ -1,4 +1,5 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work). Existing models and services, new integration:
+the models and vendors wrapped here existed before the hackathon; only this integration code is new.
 
 CPU-only signals: librosa audio features and FFmpeg scene-cut detection. No GPU, no network.
 """

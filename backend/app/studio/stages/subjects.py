@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Subjects stage: SAM 3.1 tracks "person" and "face" on a low-fps clip (10 by default) and the per-frame
 detections are reduced to compact tracks (presence per second, a 0.5 s box timeline, safe

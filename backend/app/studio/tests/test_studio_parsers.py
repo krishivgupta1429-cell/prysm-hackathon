@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Offline tests (no network) for the Studio parsers: SAM delta strings, model JSON fence
 stripping, language routing, and the track reducer built on top of the SAM parser.

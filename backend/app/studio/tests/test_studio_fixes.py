@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Offline tests (no network, no waiting) for the Stage 1D fixes: Gemini retry with exponential backoff, the
 audio_listener_missing cap, the "rotate" fix and intent, the evidence-limited Trend Alignment label, and the

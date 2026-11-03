@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Runs the perception stages concurrently (asyncio + to_thread for the blocking HTTP calls), each under
 its own timeout: watch, speech, subjects, the two audio listeners (Spark, Gemini) and signals (Modal GPU

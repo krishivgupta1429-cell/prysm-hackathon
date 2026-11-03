@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Pydantic models for the model's scoring output and for analysis.json (schema_version "1.0").
 The parsers are lenient about types (a model may return "3" or "0:03") and strict about the structure;

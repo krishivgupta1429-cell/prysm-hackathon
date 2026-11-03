@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Niche detection: muse-spark-1.3 (text only, through meta_client) reads the evidence pack and returns
 {niche, confidence 0-1, runner_up, reasons: [evidence ids]}. Below 0.5 confidence the niche falls back to

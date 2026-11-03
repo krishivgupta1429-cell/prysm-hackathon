@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 The scoring call: one muse-spark-1.3 text call (low temperature, JSON only) over the evidence pack and the
 niche's judging notes, optionally with up to 6 keyframes (--with-frames). It returns 10 parameters, each with

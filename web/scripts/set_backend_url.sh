@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hackathon-built (Meta Global AI Developer Hackathon).
+# Built during the Meta Global AI Developer Hackathon (new work).
 # Points the host's API proxy rewrites (vercel.json, netlify.toml, public/_redirects) at your backend.
 # Usage: scripts/set_backend_url.sh https://your-backend.example.com
 set -euo pipefail

@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Offline tests (no network) for Stage 1B: tokenizer, alignment, consensus voting and timing,
 caption helpers and the SRT writer, ASR scoring, and the audio listeners' retry logic

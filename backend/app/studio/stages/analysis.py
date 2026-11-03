@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Analysis stage (Stage 1D): runs after consensus, captions, signals and music_id, on the finished report.
 

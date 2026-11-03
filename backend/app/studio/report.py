@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Pydantic models for the Studio perception report (schema_version "1.3": adds analysis; 1.2 added signals and music_id; 1.1 audio, consensus, captions).
 

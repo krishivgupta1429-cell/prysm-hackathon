@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Offline tests (no network, no model downloads, no Modal) for Stage 1C: the before/after deltas, the report
 schema, the "skipped on Modal failure" path with a mocked Modal call, the ACRCloud signature against a fixed

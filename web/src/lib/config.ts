@@ -1,4 +1,4 @@
-// Hackathon-built (Meta Global AI Developer Hackathon).
+// Built during the Meta Global AI Developer Hackathon (new work).
 // Deployment-specific values, all read from VITE_* variables so nothing about a particular deployment is hardcoded.
 // With none of them set the site behaves exactly as before (full pricing and billing UI).
 const env = import.meta.env

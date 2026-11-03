@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Offline tests (no network) for Stage 1D: the evidence pack and its size cap, the niche weights and band
 mapping, the validator, edit-intent ranking, the JSON repair path with a mocked client, the niche override and

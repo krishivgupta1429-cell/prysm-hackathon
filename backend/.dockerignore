@@ -1,4 +1,4 @@
-# Hackathon-built (Meta Global AI Developer Hackathon): keep secrets and local environments out of the image.
+# Built during the Meta Global AI Developer Hackathon (new work): keep secrets and local environments out of the image.
 .env
 .env.*
 !.env.example

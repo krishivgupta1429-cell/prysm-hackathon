@@ -1,4 +1,4 @@
-"""Hackathon-built (Meta Global AI Developer Hackathon).
+"""Built during the Meta Global AI Developer Hackathon (new work).
 
 Creator-provided inputs for the analysis: the niche list (1 to 3 niches, which the website joins with
 commas) and the description (which the website sends as `brief`). The model no longer guesses the niche on
