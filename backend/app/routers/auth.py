@@ -702,35 +702,15 @@ def _get_ip(request: Request) -> str:
 
 
 # ── Instagram OAuth ───────────────────────────────────────────────────────────
+# Hackathon: the three routes keep their paths (the redirect URI registered with Meta ends in /auth/instagram/callback) but the
+# logic moved to app/studio/instagram (two scopes, state checked before the code is exchanged, long-lived token + refresh,
+# disconnect deletes every derived row). The new UI starts the flow with POST /instagram/connect instead of a token in the URL.
 
 @router.get("/instagram")
-async def instagram_oauth_start(
-    token: str,
-    db: AsyncSession = Depends(get_db),
-):
-    """Redirect user to Instagram OAuth consent screen."""
-    from fastapi.responses import RedirectResponse
-    from app.core.security import decode_token
-    if not settings.INSTAGRAM_APP_ID:
-        raise HTTPException(status_code=503, detail="Instagram integration not configured")
-
-    payload = decode_token(token)
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    # Generate a CSRF state token and map it to the user_id in Redis (10 min TTL)
-    csrf_state = secrets.token_urlsafe(32)
-    await redis_client.setex(f"ig_oauth_state:{csrf_state}", 600, user_id)
-
-    params = urlencode({
-        "client_id": settings.INSTAGRAM_APP_ID,
-        "redirect_uri": settings.INSTAGRAM_REDIRECT_URI,
-        "scope": "instagram_business_basic,instagram_business_manage_messages,instagram_business_manage_comments,instagram_business_content_publish,instagram_business_manage_insights",
-        "response_type": "code",
-        "state": csrf_state,
-    })
-    return RedirectResponse(f"https://www.instagram.com/oauth/authorize?{params}")
+async def instagram_oauth_start(token: str):
+    """Redirect user to Instagram OAuth consent screen (kept for compatibility)."""
+    from app.studio.instagram.router import start_redirect
+    return await start_redirect(token)
 
 
 @router.get("/instagram/callback")
@@ -741,77 +721,8 @@ async def instagram_oauth_callback(
     db: AsyncSession = Depends(get_db),
 ):
     """Handle Instagram OAuth callback, exchange code for token, store on user."""
-    from fastapi.responses import RedirectResponse
-
-    # Use INSTAGRAM_FRONTEND_URL if set (local dev), otherwise fall back to FRONTEND_URL (production)
-    _frontend = settings.INSTAGRAM_FRONTEND_URL or settings.FRONTEND_URL
-
-    if error or not code:
-        return RedirectResponse(f"{_frontend}/settings?instagram=error")
-
-    # Exchange code for short-lived token
-    async with httpx.AsyncClient() as client:
-        token_res = await client.post(
-            "https://api.instagram.com/oauth/access_token",
-            data={
-                "client_id": settings.INSTAGRAM_APP_ID,
-                "client_secret": settings.INSTAGRAM_APP_SECRET,
-                "grant_type": "authorization_code",
-                "redirect_uri": settings.INSTAGRAM_REDIRECT_URI,
-                "code": code,
-            },
-        )
-    if token_res.status_code != 200:
-        return RedirectResponse(f"{_frontend}/settings?instagram=error")
-
-    token_data = token_res.json()
-    short_token = token_data.get("access_token")
-    ig_user_id = str(token_data.get("user_id", ""))
-
-    # Exchange for long-lived token (60-day expiry)
-    async with httpx.AsyncClient() as client:
-        ll_res = await client.get(
-            "https://graph.instagram.com/access_token",
-            params={
-                "grant_type": "ig_exchange_token",
-                "client_secret": settings.INSTAGRAM_APP_SECRET,
-                "access_token": short_token,
-            },
-        )
-    long_token = short_token
-    if ll_res.status_code == 200:
-        long_token = ll_res.json().get("access_token", short_token)
-
-    # Fetch Instagram username from Graph API
-    ig_username = ""
-    async with httpx.AsyncClient() as client:
-        me_res = await client.get(
-            "https://graph.instagram.com/me",
-            params={"fields": "id,username", "access_token": long_token},
-        )
-    if me_res.status_code == 200:
-        ig_username = me_res.json().get("username", "")
-
-    # Resolve CSRF state token → user_id (single-use)
-    if not state:
-        return RedirectResponse(f"{_frontend}/settings?instagram=error")
-    state_key = f"ig_oauth_state:{state}"
-    resolved_user_id = await redis_client.get(state_key)
-    if not resolved_user_id:
-        return RedirectResponse(f"{_frontend}/settings?instagram=error")
-    await redis_client.delete(state_key)
-
-    from sqlalchemy import text
-    result = await db.execute(select(User).where(User.id == resolved_user_id))
-    user = result.scalar_one_or_none()
-    if user:
-        await db.execute(
-            text("UPDATE users SET instagram_access_token = :tok, instagram_user_id = :uid, instagram_username = :uname WHERE id = :id"),
-            {"tok": long_token, "uid": ig_user_id, "uname": ig_username, "id": str(user.id)},
-        )
-        await db.commit()
-
-    return RedirectResponse(f"{_frontend}/settings?instagram=connected")
+    from app.studio.instagram.router import callback_redirect
+    return await callback_redirect(db, code, state, error)
 
 
 @router.delete("/instagram")
@@ -819,11 +730,7 @@ async def instagram_disconnect(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Clear the user's stored Instagram token and user_id."""
-    from sqlalchemy import text
-    await db.execute(
-        text("UPDATE users SET instagram_access_token = NULL, instagram_user_id = NULL WHERE id = :id"),
-        {"id": str(current_user.id)},
-    )
-    await db.commit()
+    """Delete the user's Instagram token and all data derived from it."""
+    from app.studio.instagram import oauth as ig_oauth
+    await ig_oauth.disconnect(db, current_user.id)
     return {"detail": "Instagram disconnected"}

@@ -206,6 +206,8 @@ app.include_router(clips.router,        prefix="/clips",        tags=["Clip Gene
 app.include_router(prysm.router,       prefix="/prysm",        tags=["Prysm Analysis"])
 app.include_router(billing.router,     prefix="/billing",      tags=["Billing"])
 app.include_router(admin.router,       prefix="/admin",         tags=["Admin"])
+from app.studio.instagram.router import router as instagram_router  # hackathon: Instagram connect + Creator DNA
+app.include_router(instagram_router, prefix="/instagram", tags=["Instagram / Creator DNA"])
 
 if settings.DEV_BAKEOFF:  # hackathon, local only: the founder's blind bake-off review page (never mounted unless the flag is on)
     from app.studio import dev_bakeoff

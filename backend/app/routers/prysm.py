@@ -210,6 +210,14 @@ async def _run_analysis_task(
                 raise RuntimeError("Prysm is busy right now. Please try again in a few minutes.")
             global_slot_held = True
             progress = Progress(job_id)
+        # Hackathon: Creator DNA addendum for users who imported their own reels (empty string = baseline behaviour)
+        dna_addendum = ""
+        try:
+            from app.studio.instagram import personalise as _pz
+            async with AsyncSessionLocal() as _dna_db:
+                dna_addendum = _pz.addendum(await _pz.load(_dna_db, _uuid.UUID(str(user_id))))
+        except Exception as _dna_err:
+            _log.warning(f"[Prysm] Creator DNA addendum skipped for job {job_id}: {type(_dna_err).__name__}")
         result = await run_full_analysis(
             video_path=video_path,
             niche=niche,
@@ -221,7 +229,25 @@ async def _run_analysis_task(
             source_type=source_type,
             credit_checker=None if settings.STUDIO_UNLIMITED else credit_checker,
             progress_cb=progress,
+            creator_dna_addendum=dna_addendum,
         )
+        # Hackathon: "How this compares to your last N reels" block (fails soft; its small model cost is added to the analysis cost)
+        if dna_addendum:
+            try:
+                from app.studio.instagram import dna as _dna, personalise as _pz
+                from app.studio import safety as _sf
+                from app.core.cache import redis_client as _rc
+                _sp = _dna.Spend(_dna.cost_cap_usd())
+                async with AsyncSessionLocal() as _dna_db:
+                    _blk = await _pz.comparison_block(_dna_db, _uuid.UUID(str(user_id)), result, _sp)
+                if _blk:
+                    result["creatorDna"] = _blk
+                    if _sp.usd and isinstance(result.get("_cost"), dict):
+                        result["_cost"]["creator_dna_usd"] = _sp.usd
+                        result["_cost"]["total_usd"] = round(float(result["_cost"].get("total_usd") or 0.0) + _sp.usd, 6)
+                    await _sf.record_spend(_rc, _sp.usd)
+            except Exception as _blk_err:
+                _log.warning(f"[Prysm] Creator DNA comparison skipped for job {job_id}: {type(_blk_err).__name__}")
         if progress is not None:
             await progress.flush()
             try:
