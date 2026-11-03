@@ -267,14 +267,30 @@ async def _delete_derived(db, acct: IgAccount) -> dict:
     return counts
 
 
+async def _scrub_saved_results(db, user_id) -> int:
+    """The "How this compares to your last N reels" block saved on the user's earlier analyses is derived from their reels:
+    remove it. Fails soft (no prysm_analyses table in a unit-test database)."""
+    from sqlalchemy import text
+    try:
+        async with db.begin_nested():
+            res = await db.execute(text(
+                "UPDATE prysm_analyses SET raw_result = (raw_result::jsonb - 'creatorDna')::json "
+                "WHERE user_id = :u AND (raw_result::jsonb ->> 'creatorDna') IS NOT NULL"), {"u": str(user_id)})
+            return res.rowcount or 0
+    except Exception as e:
+        log.info("[Instagram] saved-result scrub skipped: %s", type(e).__name__)
+        return 0
+
+
 async def disconnect(db, user_id) -> dict:
-    """Delete the token and ALL derived data (reels, insights, DNA, the account row)."""
+    """Delete the token and ALL derived data (reels, insights, DNA, the account row, the comparison block on saved analyses)."""
     from app.models.user import User
     acct = await get_account(db, user_id)
     counts = {}
     if acct is not None:
         counts = await _delete_derived(db, acct)
         await db.delete(acct)
+        counts["saved_results_scrubbed"] = await _scrub_saved_results(db, user_id)
     await db.execute(update(User).where(User.id == user_id).values(
         instagram_access_token=None, instagram_user_id=None, instagram_username=None))
     await db.commit()
