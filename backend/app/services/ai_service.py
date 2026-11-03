@@ -20,7 +20,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-import anthropic
+from app.studio.llm_switch import anthropic  # the anthropic package, or Muse Spark behind the same interface (AI_PROVIDER=meta)
 
 from app.core.config import settings
 

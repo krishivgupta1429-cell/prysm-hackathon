@@ -49,6 +49,8 @@ async def _send_email(to_email: str, subject: str, html: str) -> bool:
 
 def _base_template(content: str, preheader: str = "") -> str:
     """Wrap content in Prysm-branded email shell — warm, premium aesthetic."""
+    site_url = settings.FRONTEND_URL.rstrip("/")  # the deployed website, not a hardcoded domain
+    site_host = site_url.split("://", 1)[-1]
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -92,23 +94,8 @@ def _base_template(content: str, preheader: str = "") -> str:
         <p style="color:#9c8e7c;font-size:12px;margin:0;font-weight:500;">Prysm — AI Content Intelligence</p>
         <p style="color:#b8ad9e;font-size:11px;margin:10px 0 0;line-height:1.5;">
           You received this because you have an account at
-          <a href="https://theprysm.io" style="color:#9c8e7c;text-decoration:none;">theprysm.io</a>
+          <a href="{site_url}" style="color:#9c8e7c;text-decoration:none;">{site_host}</a>
         </p>
-        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px auto 0;">
-        <tr>
-          <td style="padding:0 6px;">
-            <a href="https://x.com/theprysm7" style="color:#b8ad9e;text-decoration:none;font-size:11px;">X</a>
-          </td>
-          <td style="color:#d4cdc4;font-size:11px;">·</td>
-          <td style="padding:0 6px;">
-            <a href="https://www.instagram.com/theprysm7/" style="color:#b8ad9e;text-decoration:none;font-size:11px;">Instagram</a>
-          </td>
-          <td style="color:#d4cdc4;font-size:11px;">·</td>
-          <td style="padding:0 6px;">
-            <a href="https://www.linkedin.com/company/the-prysm/" style="color:#b8ad9e;text-decoration:none;font-size:11px;">LinkedIn</a>
-          </td>
-        </tr>
-        </table>
       </td></tr>
 
     </table>

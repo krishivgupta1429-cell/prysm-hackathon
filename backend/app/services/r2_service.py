@@ -39,15 +39,22 @@ def _bucket() -> str:
     return _cfg()["bucket"]
 
 
+_warned_not_ready = False
+
+
 def _ready() -> bool:
+    global _warned_not_ready
     cfg = _cfg()
-    return bool(cfg["account_id"] and cfg["access_key"])
+    ok = bool(cfg["account_id"] and cfg["access_key"])
+    if not ok and not _warned_not_ready:  # fail soft, log once
+        _warned_not_ready = True
+        logger.warning("[R2] Credentials not configured — edited-video storage is unavailable")
+    return ok
 
 
 def upload_video(local_path: str, object_key: str) -> bool:
     """Upload a local video file to R2. Returns True on success."""
     if not _ready():
-        logger.error("[R2] Credentials not configured — skipping upload")
         return False
     try:
         file_size = os.path.getsize(local_path)
@@ -72,7 +79,6 @@ def upload_video(local_path: str, object_key: str) -> bool:
 def get_presigned_url(object_key: str, expiry_seconds: int = 3600 * 24) -> str | None:
     """Generate a pre-signed GET URL. Default expiry: 24 hours."""
     if not _ready():
-        logger.error("[R2] Credentials not configured")
         return None
     try:
         url = _client().generate_presigned_url(

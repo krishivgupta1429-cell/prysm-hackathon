@@ -14,6 +14,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",  # the Meta layer's own variables (META_API_KEY, ...) live in the same .env
     )
 
     # ── App ───────────────────────────────────────────────────────────────────
@@ -21,7 +22,28 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     DEBUG: bool = False
     SECRET_KEY: str = "change-me-in-production"
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "https://theprysm.io", "https://www.theprysm.io", "http://localhost:5173"]
+    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+    CORS_ORIGINS: str = ""         # comma-separated extra origins allowed by CORS (the deployed website), e.g. https://my-app.example
+    TRUSTED_HOSTS: str = ""        # comma-separated hostnames the API answers to in production (empty: no host check)
+    CSP_CONNECT_SRC: str = ""      # space-separated extra connect-src entries for the production CSP (e.g. the backend URL)
+    PROMOTE_EMAILS: str = ""       # comma-separated emails promoted to the Creator plan at startup (empty: nobody)
+
+    # ── Hackathon switches (Meta Global AI Developer Hackathon; every default keeps the baseline behaviour) ──
+    AI_PROVIDER: str = ""                      # "meta": every Claude call is served by Muse Spark through app/studio/meta_llm_shim.py
+    AUTO_EDIT_ENABLED: bool = True             # the baseline auto-edit + R2 upload step after an analysis; the hackathon env switches it off (AUTO_EDIT_ENABLED=0)
+    STUDIO_MAX_CONCURRENT: int = 2             # analyses running at once across all processes (safety net)
+    DEMO_AUTO_VERIFY: bool = False             # demo mode: new accounts are verified at once (no email provider needed)
+    STUDIO_ALLOW_LINKS: bool = True            # reel links (the baseline link flow). Off: uploads only
+    STUDIO_UNLIMITED: bool = False             # demo mode: no plans or credits; every user gets the full result (see studio/safety.py)
+    STUDIO_DAILY_SPEND_CAP_USD: float = 10.0   # safety net: stop new analyses for the UTC day once their real cost adds up to this
+    STUDIO_USER_MAX_CONCURRENT: int = 1        # safety net: analyses one user can have running at once
+    STUDIO_USER_HOURLY_LIMIT: int = 10         # safety net: analyses one user can start per hour
+    STUDIO_REGISTER_PER_IP_HOURLY: int = 5     # safety net: sign-ups per IP per hour
+
+    @property
+    def META_MODE(self) -> bool:
+        """True when AI_PROVIDER=meta: the Claude call sites are served by Muse Spark (and the Anthropic package is never imported)."""
+        return (self.AI_PROVIDER or "").strip().lower() == "meta"
 
     # ── Admin / Security ──────────────────────────────────────────────────────
     FOUNDER_EMAIL: str = ""        # Set in Railway env — never hardcode
@@ -91,9 +113,9 @@ class Settings(BaseSettings):
 
     # ── Email (Brevo) ────────────────────────────────────────────────────────
     BREVO_API_KEY: str = ""
-    BREVO_FROM_EMAIL: str = "theprysm77@gmail.com"
+    BREVO_FROM_EMAIL: str = ""        # sender address; email is only sent when BREVO_API_KEY is set
     BREVO_FROM_NAME: str = "Prysm"
-    FRONTEND_URL: str = "https://theprysm.io"
+    FRONTEND_URL: str = "http://localhost:3000"  # the website's URL, used in emails and OAuth redirects
     VERIFICATION_TOKEN_EXPIRE_HOURS: int = 24
     RESET_TOKEN_EXPIRE_MINUTES: int = 60
 

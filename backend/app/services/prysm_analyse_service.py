@@ -25,7 +25,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-import anthropic
+from app.studio.llm_switch import anthropic  # the anthropic package, or Muse Spark behind the same interface (AI_PROVIDER=meta)
 
 from app.core.config import settings, NICHE_WEIGHTS, DEFAULT_SCORED_WEIGHTS, ADVISORY_PARAMETERS, SCORED_PARAMETERS
 from app.services.trend_service import get_trend_data, build_trend_context
@@ -242,7 +242,15 @@ PRICING = {
     "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
     "claude-opus-4-6":   {"input": 15.0, "output": 75.0},
     "gemini-2.5-pro":    {"input": 1.25, "output": 10.0},
+    # Muse Spark (AI_PROVIDER=meta): published prices per million tokens
+    "muse-spark-1.3":    {"input": 1.25, "output": 4.25},
+    "muse-spark-1.2":    {"input": 1.25, "output": 4.25},
 }
+
+
+def _resp_model(response, default: str) -> str:
+    """The model name to price a response with: the model that really answered when AI_PROVIDER=meta, else the original name."""
+    return (getattr(response, "model", None) or default) if settings.META_MODE else default
 # RunPod RTX A5000 serverless rate ($/second of GPU compute including delay)
 RUNPOD_A40_COST_PER_SEC = 0.00078
 
@@ -1609,9 +1617,12 @@ Return ONLY valid JSON:
     )
 
     # Capture token usage for cost tracking
-    _vision_usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens, "model": "claude-sonnet-4-6"}
+    _vision_usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens, "model": _resp_model(response, "claude-sonnet-4-6")}
 
     raw = response.content[0].text
+    if settings.META_MODE:
+        from app.studio.json_tolerant import extract_json_object
+        raw = extract_json_object(raw)  # code fences / text around the JSON (Muse Spark)
     raw = re.sub(r"```json\n?", "", raw)
     raw = re.sub(r"```\n?", "", raw)
     try:
@@ -2195,8 +2206,12 @@ async def run_full_analysis(
     intent: str = "my_video",
     source_type: str = "upload",
     credit_checker: Optional[Callable[[float], Awaitable[bool]]] = None,
+    progress_cb: Optional[Callable[[str, str], None]] = None,
 ) -> Dict[str, Any]:
     """Run the complete Prysm analysis pipeline.
+
+    progress_cb: optional (stage, status) callback so the website can show the real stage of the job (hackathon shell;
+        None changes nothing).
 
     credit_checker: optional async callable(stage1_cost_usd: float) -> bool
         Called after Stage 1 (Vision + Gemini + RunPod) completes.
@@ -2206,6 +2221,8 @@ async def run_full_analysis(
     """
 
     work_dir = tempfile.mkdtemp(prefix="prysm_")
+    from app.studio.progress import tracked, StageGroup  # progress reporting only (hackathon shell)
+    _pcb = progress_cb
     # For multi-niche, use first niche for context lookup
     primary_niche = niche.split(",")[0].strip() if "," in niche else niche
     niche_ctx = NICHE_CONTEXT.get(primary_niche, f"{niche} creator — apply platform best practices.")
@@ -2221,7 +2238,11 @@ async def run_full_analysis(
         loop = asyncio.get_event_loop()
         frames_future = loop.run_in_executor(_executor, extract_frames, video_path, work_dir)
         audio_future = loop.run_in_executor(_executor, extract_audio, video_path, work_dir)
+        if _pcb:
+            _pcb("frames", "running")
         frames, audio_path = await asyncio.gather(frames_future, audio_future)
+        if _pcb:
+            _pcb("frames", "ok")
 
         logger.info(f"[Prysm] Extraction done: {len(frames)} frames, audio={'yes' if audio_path else 'no'}")
 
@@ -2264,11 +2285,12 @@ async def run_full_analysis(
         tasks = {}
 
         if frames:
-            tasks["vision"] = analyse_frames_with_claude(frames, niche, platform, brief)
+            tasks["vision"] = tracked(_pcb, "vision", analyse_frames_with_claude(frames, niche, platform, brief))
 
         # Embedding extraction — runs in parallel with Sonnet Vision in Step B.
         # 45s timeout guards against cold model downloads blocking the analysis.
         # Failures/timeouts are caught and embeddings are simply skipped.
+        _signals = StageGroup(_pcb, "signals")
         try:
             from app.services.embedding_service import compute_all_embeddings, run_demucs_background
             _emb_frames = list(frames)
@@ -2286,7 +2308,7 @@ async def run_full_analysis(
                 except asyncio.TimeoutError:
                     logger.warning("[Prysm] Embedding extraction timed out after 90s — skipping")
                     return {}
-            tasks["embeddings"] = asyncio.ensure_future(_embeddings_with_timeout())
+            tasks["embeddings"] = asyncio.ensure_future(_signals.run(_embeddings_with_timeout()))
             # Demucs: fire-and-forget background task using original video file.
             # Does NOT block the response — stems saved to a temp dir and discarded after use.
             asyncio.ensure_future(
@@ -2296,9 +2318,9 @@ async def run_full_analysis(
             logger.warning("[Prysm] embedding_service not available — skipping embeddings")
 
         if audio_path:
-            tasks["whisper"] = loop.run_in_executor(_executor, transcribe_audio, audio_path)
+            tasks["whisper"] = tracked(_pcb, "speech", loop.run_in_executor(_executor, transcribe_audio, audio_path))
             tasks["audio_measure"] = loop.run_in_executor(_executor, measure_audio, audio_path)
-            tasks["energy_curve"] = loop.run_in_executor(_executor, compute_audio_energy_curve, audio_path)
+            tasks["energy_curve"] = _signals.run(loop.run_in_executor(_executor, compute_audio_energy_curve, audio_path))
             # ACRCloud — song fingerprinting (runs in parallel, free, 5000/month)
             if settings.ACRCLOUD_HOST and settings.ACRCLOUD_ACCESS_KEY:
                 from app.services.acrcloud_service import identify_song_multi_sample
@@ -2311,7 +2333,7 @@ async def run_full_analysis(
                     except asyncio.TimeoutError:
                         logger.warning("[Prysm] ACRCloud timed out after 30s — skipping")
                         return {}
-                tasks["acrcloud"] = _acrcloud_with_timeout()
+                tasks["acrcloud"] = tracked(_pcb, "music_id", _acrcloud_with_timeout())
             if settings.GEMINI_API_KEY:
                 gemini_frames = list(frames)[:12] if frames else None
                 async def _gemini_with_timeout():
@@ -2323,11 +2345,11 @@ async def run_full_analysis(
                     except asyncio.TimeoutError:
                         logger.warning("[Prysm Audio] Gemini timed out after 90s — skipping")
                         return {}
-                tasks["gemini_audio"] = _gemini_with_timeout()
+                tasks["gemini_audio"] = tracked(_pcb, "audio", _gemini_with_timeout())
 
         # LAION Aesthetics v2 — per-frame visual quality scores
         if frames:
-            tasks["aesthetics"] = loop.run_in_executor(_executor, score_frames, list(frames))
+            tasks["aesthetics"] = _signals.run(loop.run_in_executor(_executor, score_frames, list(frames)))
 
         # Generic trend fetch — runs in parallel with Vision using just niche+platform.
         # After Vision completes we do a quick vibe-enrichment pass if keywords are available.
@@ -2341,7 +2363,7 @@ async def run_full_analysis(
             except (asyncio.TimeoutError, Exception) as e:
                 logger.warning(f"[Prysm] Generic trend fetch failed: {e}")
                 return {}
-        tasks["trend_generic"] = _trend_generic_with_timeout()
+        tasks["trend_generic"] = tracked(_pcb, "trends", _trend_generic_with_timeout())
 
         # Await all parallel tasks
         task_keys = list(tasks.keys())
@@ -2606,6 +2628,8 @@ async def run_full_analysis(
 
         # ── Run both scoring calls in parallel ──
         logger.info(f"[Prysm] Starting parallel Claude scoring (call A: params 1-5, call B: params 6-10)")
+        if _pcb:
+            _pcb("scoring", "running")
         _call_a_msg = [{"role": "user", "content": _call_a_prompt}]
         _call_b_msg = [{"role": "user", "content": _call_b_prompt}]
 
@@ -2621,10 +2645,13 @@ async def run_full_analysis(
         _scoring_usage = {
             "input_tokens": resp_a.usage.input_tokens + resp_b.usage.input_tokens,
             "output_tokens": resp_a.usage.output_tokens + resp_b.usage.output_tokens,
-            "model": "claude-sonnet-4-6",
+            "model": _resp_model(resp_a, "claude-sonnet-4-6"),
         }
 
         def _clean_and_parse(raw: str, label: str) -> dict:
+            if settings.META_MODE:
+                from app.studio.json_tolerant import extract_json_object
+                raw = extract_json_object(raw)  # code fences / text around the JSON (Muse Spark)
             raw = re.sub(r"```json\n?", "", raw)
             raw = re.sub(r"```\n?", "", raw)
             raw = raw.strip()
@@ -2642,8 +2669,30 @@ async def run_full_analysis(
                     logger.error(f"[Prysm] {label} json_repair also failed ({e2}), dumping first 500 chars: {raw[:500]}")
                     raise ValueError(f"Could not parse or repair Claude {label} JSON response ({len(raw)} chars)")
 
-        result_a = _clean_and_parse(resp_a.content[0].text, "call-A")
-        result_b = _clean_and_parse(resp_b.content[0].text, "call-B")
+        async def _parse_with_one_repair(resp, msgs, max_tok, label):
+            """Parse a scoring reply; with AI_PROVIDER=meta an unparsable reply gets exactly one 'return only the JSON' retry."""
+            try:
+                return _clean_and_parse(resp.content[0].text, label)
+            except ValueError:
+                if not settings.META_MODE:
+                    raise
+                logger.warning(f"[Prysm] {label} reply was not valid JSON — one repair retry")
+                retry = await _claude_with_retry(
+                    client, model="claude-sonnet-4-6", max_tokens=max_tok,
+                    messages=list(msgs) + [
+                        {"role": "assistant", "content": resp.content[0].text},
+                        {"role": "user", "content": "That reply was not valid JSON. Return ONLY the complete, corrected JSON object — no commentary, no code fences."},
+                    ],
+                )
+                _scoring_usage["input_tokens"] += retry.usage.input_tokens
+                _scoring_usage["output_tokens"] += retry.usage.output_tokens
+                return _clean_and_parse(retry.content[0].text, label + "-repair")
+
+        if _pcb:
+            _pcb("scoring", "ok")
+            _pcb("report", "running")
+        result_a = await _parse_with_one_repair(resp_a, _call_a_msg, 9000 if is_competitor else 7000, "call-A")
+        result_b = await _parse_with_one_repair(resp_b, _call_b_msg, 6000, "call-B")
 
         # Merge: top-level fields from A, parameters = A params + B params
         result = result_a
@@ -2824,6 +2873,8 @@ async def run_full_analysis(
             "verbalCTA": whisper_data.get("verbalCTA"),
         }
 
+        if _pcb:
+            _pcb("report", "ok")
         logger.info(f"[Prysm] ✅ Done | score={result.get('overallScore')} | vision={has_vision} | speech={whisper_data.get('hasSpeech')} | lang={whisper_data.get('language')}")
         return result
 

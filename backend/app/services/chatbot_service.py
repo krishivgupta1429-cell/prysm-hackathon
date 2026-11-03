@@ -8,7 +8,7 @@ import json
 import logging
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-import anthropic
+from app.studio.llm_switch import anthropic  # the anthropic package, or Muse Spark behind the same interface (AI_PROVIDER=meta)
 
 from app.core.config import settings
 from app.services.memory_service import get_creator_context
