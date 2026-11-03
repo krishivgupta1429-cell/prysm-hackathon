@@ -121,6 +121,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     GLOBAL_WINDOW  = 60
     GLOBAL_LIMIT   = 120
     SKIP_PATHS     = {"/health", "/metrics", "/docs", "/redoc", "/openapi.json"}
+    GLOBAL_EXEMPT_PREFIXES = ("/prysm/analyse/status",)  # hackathon: polled every few seconds for minutes
+
+    @staticmethod
+    async def _hit(redis_client, key: str, window: int) -> int:
+        """Count one request in a fixed window: the expiry is set when the window opens, never pushed back by later requests."""
+        count = await redis_client.incr(key)
+        if count == 1:
+            await redis_client.expire(key, window)
+        return count
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if request.method == "OPTIONS" or request.url.path in self.SKIP_PATHS:
@@ -131,17 +140,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         try:
             from app.core.cache import redis_client
 
-            # Global IP limit
-            global_key = f"rl:global:{ip}"
-            pipe = redis_client.pipeline()
-            pipe.incr(global_key)
-            pipe.expire(global_key, self.GLOBAL_WINDOW)
-            results = await pipe.execute()
-            count = results[0]
+            # Global IP limit. Hackathon change: the analysis status poll is exempt (it has its own, generous per-user
+            # limit below), and a window is fixed from its FIRST request: the baseline reset the expiry on every request,
+            # so a client that kept polling inside the window never saw the counter expire and was blocked for good.
+            if not request.url.path.startswith(self.GLOBAL_EXEMPT_PREFIXES):
+                global_key = f"rl:global:{ip}"
+                count = await self._hit(redis_client, global_key, self.GLOBAL_WINDOW)
 
-            if count > self.GLOBAL_LIMIT:
-                logger.warning("Global rate limit hit", extra={"x_ip": ip, "count": count})
-                return self._rate_limit_response("Too many requests. Please slow down.")
+                if count > self.GLOBAL_LIMIT:
+                    logger.warning("Global rate limit hit", extra={"x_ip": ip, "count": count})
+                    return self._rate_limit_response("Too many requests. Please slow down.")
 
             # Route-specific limits
             for prefix, window, limit, key_type in self.RULES:
@@ -153,11 +161,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                         identifier = ip
 
                     route_key = f"rl:{prefix}:{identifier}"
-                    pipe2 = redis_client.pipeline()
-                    pipe2.incr(route_key)
-                    pipe2.expire(route_key, window)
-                    res2 = await pipe2.execute()
-                    route_count = res2[0]
+                    route_count = await self._hit(redis_client, route_key, window)
 
                     if route_count > limit:
                         logger.warning(
