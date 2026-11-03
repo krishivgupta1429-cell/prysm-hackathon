@@ -1,9 +1,16 @@
 // Built during the Meta Global AI Developer Hackathon (new work).
-// "Predicted Viewer Behaviour" for the Modal-served models (source "evqa" or "qwen_zero_shot") plus the separate
-// "Visual quality signal" from Q-Align. Black-and-white, inline styles. The subtitle says honestly where the numbers
+// "Predicted Viewer Behaviour". With Instagram data imported it shows the creator's MEASURED averages (watch-through, skip rate, reach)
+// from their own reels, labelled "measured from your account". Without it, no percentage bars: a line that links to the connect flow.
+// The zero-shot Qwen hook/watch percentages (near-constant, about 70% for every video) are hidden unless VITE_SHOW_QWEN_CARD=1, and
+// then they still say "Rough estimate from frame content, not measured watch data". The separate "Visual quality signal" from Q-Align stays.
+// Source "evqa" (a model trained on watch data) keeps its bars. Black-and-white, inline styles. The subtitle says honestly where the numbers
 // come from; when the prediction is unavailable no bars are drawn. Q-Align is a picture-quality score from 1 to 5,
 // never a percentage and never a watch prediction.
-import type { CSSProperties } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
+import { Link } from 'react-router-dom'
+import { apiUrl } from '@/lib/api'
+import { authFetch, getToken } from '@/lib/auth'
+import { SHOW_QWEN_CARD } from '@/lib/config'
 
 export type QAlign = { quality: number; aesthetic: number; band: string; scale?: number[]; source?: string }
 export type Engagement = {
@@ -68,29 +75,67 @@ function QualityPanel({ q }: { q: QAlign }) {
   )
 }
 
-export default function ViewerBehaviourCard({ ep }: { ep: Engagement }) {
-  const unavailable = ep.available === false || ep.ecr == null || ep.nawp == null
+export type Measured = {
+  connected: boolean; isFixture?: boolean; reels?: number; username?: string
+  avgWatchThrough?: number | null; watchThroughReels?: number; avgSkipRate?: number | null; medianReach?: number | null
+}
+
+function Stat({ label, value, note }: { label: string; value: string; note: string }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+        <span style={{ fontSize: 13, color: '#525252' }}>{label}</span>
+        <span style={{ fontSize: 18, fontWeight: 800 }}>{value}</span>
+      </div>
+      <p style={{ fontSize: 11, color: '#a3a3a3', margin: '2px 0 0' }}>{note}</p>
+    </div>
+  )
+}
+
+export default function ViewerBehaviourCard({ ep }: { ep?: Engagement | null }) {
+  const [m, setM] = useState<Measured | null | undefined>(undefined)
+  useEffect(() => {
+    if (!getToken()) { setM(null); return }
+    authFetch(apiUrl('/instagram/measured'))
+      .then(r => (r.ok ? r.json() : null))
+      .then((j: Measured | null) => setM(j && j.connected ? j : null))
+      .catch(() => setM(null))
+  }, [])
+  const unavailable = !ep || ep.available === false || ep.ecr == null || ep.nawp == null
+  const showEstimate = !unavailable && (ep!.source === 'evqa' || (ep!.source === 'qwen_zero_shot' && SHOW_QWEN_CARD))
+  const none = (v: number | null | undefined, f: (x: number) => string) => (v == null ? 'not available' : f(v))
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16, marginBottom: 20 }}>
       <div style={{ ...box, gridColumn: 'span 1' }} data-testid="viewer-behaviour">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
           <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Predicted Viewer Behaviour</h2>
-          {!unavailable && <span style={tag}>{SOURCE_LABEL[ep.source] || ep.source}</span>}
+          {m && <span style={tag}>{m.isFixture ? 'Test data' : 'Measured'}</span>}
         </div>
-        {unavailable ? (
-          <>
-            <p style={{ ...sub, color: '#0a0a0a', fontWeight: 600, fontSize: 14, margin: '12px 0 4px' }}>Prediction unavailable</p>
-            <p style={{ ...sub, margin: 0 }}>{ep.reason || 'The prediction model did not answer for this video.'}</p>
-          </>
-        ) : (
-          <>
-            <p style={sub}>{SUBTITLE[ep.source] || 'Estimate, not measured watch data'}</p>
-            <Bar label="Hook Hold Rate" value={ep.ecr as number} caption={HOOK[ep.hook_risk || 'medium']} note="% of viewers predicted to watch past the first 5 seconds" />
-            <Bar label="Average Watch Rate" value={ep.nawp as number} caption={RETAIN[ep.retention_risk || 'medium']} note="% of the video the average viewer is predicted to watch" />
-          </>
+        {m ? (
+          <div data-testid="measured">
+            <p style={sub}>Measured from your account: averages over your last {m.reels} imported reels, not a prediction for this video.{m.isFixture ? ' TEST DATA from the development fixture.' : ''}</p>
+            <Stat label="Average watch-through" value={none(m.avgWatchThrough, v => `${Math.round(v * 100)}%`)} note={m.watchThroughReels ? `of the reel's length, over ${m.watchThroughReels} reels with watch time` : 'Instagram gave no watch time for these reels'} />
+            <Stat label="Average skip rate" value={none(m.avgSkipRate, v => `${Math.round(v * 100)}%`)} note="share of views that skipped early (Instagram's estimate)" />
+            <Stat label="Typical reach" value={none(m.medianReach, v => Math.round(v).toLocaleString())} note="median accounts reached per reel" />
+          </div>
+        ) : m === null ? (
+          <p style={{ ...sub, color: '#0a0a0a', fontSize: 14, margin: '12px 0 0' }} data-testid="connect-line">
+            <Link to="/creator-dna" style={{ color: '#0a0a0a', fontWeight: 700 }}>Connect Instagram to see viewer behaviour measured from your own reels</Link>
+          </p>
+        ) : <p style={sub}>Loading…</p>}
+        {showEstimate && (
+          <div style={{ borderTop: '1px solid #eee', marginTop: 16, paddingTop: 12 }} data-testid="estimate">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700 }}>Estimate for this video</span>
+              <span style={tag}>{SOURCE_LABEL[ep!.source] || ep!.source}</span>
+            </div>
+            <p style={sub}>{SUBTITLE[ep!.source] || 'Estimate, not measured watch data'}</p>
+            <Bar label="Hook Hold Rate" value={ep!.ecr as number} caption={HOOK[ep!.hook_risk || 'medium']} note="% of viewers predicted to watch past the first 5 seconds" />
+            <Bar label="Average Watch Rate" value={ep!.nawp as number} caption={RETAIN[ep!.retention_risk || 'medium']} note="% of the video the average viewer is predicted to watch" />
+          </div>
         )}
       </div>
-      {ep.qalign && <QualityPanel q={ep.qalign} />}
+      {ep?.qalign && <QualityPanel q={ep.qalign} />}
     </div>
   )
 }

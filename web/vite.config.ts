@@ -17,6 +17,7 @@ export default defineConfig(({ mode }) => ({
     proxy: {
       '/prysm': PROXY_TARGET,
       '/auth': PROXY_TARGET,
+      '/instagram': PROXY_TARGET,
       '/media': PROXY_TARGET,
       '/billing': PROXY_TARGET,
       '/health': PROXY_TARGET,

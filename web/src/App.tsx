@@ -28,6 +28,7 @@ import Cookies from "./pages/Cookies";
 import NotFound from "./pages/NotFound";
 import SmoothScroll from "./providers/SmoothScroll";
 import { STUDIO_MODE, ALLOW_LINKS } from "./lib/config";
+import CreatorDna from "./studio/CreatorDna"; // hackathon: Instagram connect + Creator DNA page
 
 // Local-only review page for the blind bake-off: exists only on the dev server with VITE_DEV_BAKEOFF=1 (import.meta.env.DEV is false in
 // production builds, so the page and its chunk are dropped from them).
@@ -61,6 +62,7 @@ const App = () => (
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/settings" element={gated ? <Waitlist /> : <Settings />} />
+            <Route path="/creator-dna" element={gated ? <Waitlist /> : <CreatorDna />} />
             <Route path="/pricing" element={STUDIO_MODE ? <Navigate to="/" replace /> : <PricingPage />} />
             <Route path="/share/:shareId" element={<SharedResults />} />
             {DevBakeoff && <Route path="/dev/bakeoff" element={<Suspense fallback={null}><DevBakeoff /></Suspense>} />}
