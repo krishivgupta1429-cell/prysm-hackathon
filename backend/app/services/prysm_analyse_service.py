@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from app.studio.llm_switch import anthropic  # the anthropic package, or Muse Spark behind the same interface (AI_PROVIDER=meta)
+from app.studio.score_math import normalise_scored_weights, overall_and_predicted  # hackathon: overall over the six scored params, weights normalised to 1
 
 from app.core.config import settings, NICHE_WEIGHTS, DEFAULT_SCORED_WEIGHTS, ADVISORY_PARAMETERS, SCORED_PARAMETERS
 from app.services.trend_service import get_trend_data, build_trend_context
@@ -2771,27 +2772,16 @@ async def run_full_analysis(
             logger.warning(f"[Validate] Suggestion validation failed (non-fatal): {_ve}")
 
         # Tag each parameter as advisory or scored, and inject its weight
+        _norm_weights = normalise_scored_weights(scored_weights)
         for param in result.get("parameters", []):
             name = param.get("name", "")
             is_advisory = name in ADVISORY_PARAMETERS
             param["advisory"] = is_advisory
-            param["weight"] = round(scored_weights.get(name, 0.0) * 100, 1) if not is_advisory else 0
+            # Hackathon change: weights normalised over the six scored parameters (see app/studio/score_math.py)
+            param["weight"] = round(_norm_weights.get(name, 0.0) * 100, 1) if not is_advisory else 0
 
-        overall = 0.0
-        for param in result.get("parameters", []):
-            if not param.get("advisory", False):
-                w = scored_weights.get(param.get("name", ""), 0.0)
-                overall += param.get("score", 50) * w
-        result["overallScore"] = round(overall)
-
-        # Predicted score: assume each weak scored param (<70) gets fixed to 75
-        predicted = 0.0
-        for param in result.get("parameters", []):
-            if not param.get("advisory", False):
-                w = scored_weights.get(param.get("name", ""), 0.0)
-                s = param.get("score", 50)
-                predicted += max(s, 75) * w
-        result["predictedScoreAfterFixes"] = round(predicted)
+        # Overall + "after fixes" projection use the same normalised weights (weak scored params fixed to 75)
+        result["overallScore"], result["predictedScoreAfterFixes"] = overall_and_predicted(result.get("parameters", []), scored_weights)
 
         # Score label
         s = result["overallScore"]
