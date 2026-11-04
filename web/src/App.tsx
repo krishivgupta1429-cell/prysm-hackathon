@@ -35,6 +35,10 @@ import CreatorDna from "./studio/CreatorDna"; // hackathon: Instagram connect + 
 const DEV_BAKEOFF = import.meta.env.DEV && import.meta.env.VITE_DEV_BAKEOFF === '1'
 const DevBakeoff = DEV_BAKEOFF ? lazy(() => import('./studio/DevBakeoff')) : null
 
+// Dev-only DINOv2 page (hackathon): same rule as the bake-off page, exists only on the dev server with VITE_DEV_DINO=1.
+const DEV_DINO = import.meta.env.DEV && import.meta.env.VITE_DEV_DINO === '1'
+const DevDino = DEV_DINO ? lazy(() => import('./studio/DevDino')) : null
+
 const queryClient = new QueryClient();
 
 const gated = false
@@ -66,6 +70,7 @@ const App = () => (
             <Route path="/pricing" element={STUDIO_MODE ? <Navigate to="/" replace /> : <PricingPage />} />
             <Route path="/share/:shareId" element={<SharedResults />} />
             {DevBakeoff && <Route path="/dev/bakeoff" element={<Suspense fallback={null}><DevBakeoff /></Suspense>} />}
+            {DevDino && <Route path="/dev/dino" element={<Suspense fallback={null}><DevDino /></Suspense>} />}
             <Route path="/waitlist" element={<Waitlist />} />
             <Route path="/privacy" element={<Privacy />} />
             <Route path="/terms" element={<Terms />} />
