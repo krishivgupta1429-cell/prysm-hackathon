@@ -95,7 +95,9 @@ def addendum(data: Optional[dict]) -> str:
         lines.append("One reel was a far outlier; do not treat it as their normal.")
     lines += _fact_lines(data)
     lines.append("Where it genuinely helps, say how THIS video compares with the creator's own habits and name the reel "
-                 "(\"your Reel 3\"). Use only the facts listed here about their reels; never invent reel details. "
+                 "(\"your Reel 3\"). In the \"fix\", \"whatToChange\" and \"howToDoIt\" fields, when a change is supported by one of their reels, "
+                 "cite that reel and what it did (for example \"like your Reel 2, which opens with its first spoken words\"). "
+                 "Use only the facts listed here about their reels; never invent reel details, quotes or numbers. "
                  "Do not mention this addendum.")
     return "\n\n" + "\n".join(lines)
 
@@ -149,6 +151,28 @@ def _analysis_text(result: dict) -> str:
         if isinstance(p, dict):
             parts.append(f"{p.get('name')}: {str(p.get('problem') or p.get('whatIsHappening') or '')[:160]}")
     return "\n".join(parts)
+
+
+def new_hook_words(result: dict) -> str | None:
+    """The first ~12 seconds of speech of the NEW video, from the analysis' own transcript (word times when present)."""
+    a = result.get("audioAnalysis") if isinstance(result.get("audioAnalysis"), dict) else {}
+    words = [w for w in (a.get("words") or []) if isinstance(w, dict) and w.get("word") and (w.get("start") or 0) < 12]
+    text = " ".join(str(w["word"]) for w in words) if words else str(a.get("hookText") or "").strip()
+    text = " ".join(text.split())[:240]
+    return text if len(text.split()) >= 2 else None
+
+
+def cited_reels(data: dict, top: list[int], bottom: list[int], limit: int = 3) -> list[dict]:
+    """The creator's strongest and weakest reels in plain language, for the comparison card."""
+    by_n = {r["n"]: r for r in data["reels"]}
+    out = []
+    for group, ns in (("strongest", top), ("weakest", bottom)):
+        for n in ns[:limit]:
+            r = by_n.get(n)
+            if r:
+                out.append({"n": n, "group": group, "vsUsual": (r.get("vs_usual") or {}).get("label"), "watchThrough": r.get("watch_through"),
+                            "hookWords": r.get("hook_words"), "partial": bool(r.get("partial")), "thumbnailUrl": None})
+    return out
 
 
 def compare(new_fp: dict | None, reels: list[dict], top: list[int], bottom: list[int]) -> list[dict]:
@@ -256,7 +280,8 @@ async def comparison_block(db, user_id, result: dict, spend: D.Spend, enabled: b
     return {"personalised": True, "sampleSize": data["dna"].sample_size, "isFixture": bool(data["account"].is_fixture),
             "newFingerprint": new_fp, "comparison": compare(new_fp, data["reels"], dna.get("top") or [], dna.get("bottom") or []),
             "topReels": dna.get("top") or [], "bottomReels": dna.get("bottom") or [], "costUsd": spend.usd,
-            "partialReels": dna.get("partial_reels") or [], "grounding": grounding}
+            "partialReels": dna.get("partial_reels") or [], "grounding": grounding,
+            "newHookWords": new_hook_words(result), "citedReels": cited_reels(data, dna.get("top") or [], dna.get("bottom") or [])}
 
 
 def measured(data: Optional[dict]) -> Optional[dict]:

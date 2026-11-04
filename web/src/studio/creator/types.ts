@@ -37,3 +37,21 @@ export type Job = {
   status: 'running' | 'done' | 'error'; found?: number; requested: number; imported?: number; error?: string; progress: Record<string, string>
   missing_metrics?: string[]; rate_limited?: boolean; token_invalid?: boolean; cost_usd?: number; partial?: number
 }
+
+export type Advice = { id: string; text: string }
+export type Suggestion = { n: number; media_id: string; score: number; reasons: string[]; likely: boolean }
+export type AnalysisItem = {
+  id: string; createdAt: string | null; score: number | null; summary: string; durationS: number | null; hasEditedVideo: boolean
+  advice: Advice[]; linked: boolean; suggestions: Suggestion[]
+}
+export type ResultRow = {
+  key: string; label: string; value: number | null; usual: number | null; direction: 'better' | 'worse' | 'same' | 'none'
+  valueText: string | null; usualText: string | null; plainText?: string; note: string | null; delta?: number
+}
+export type LinkResult = { basedOn: number; rows: ResultRow[]; lagging: boolean; better: number; worse: number; same: number; compared: number; notes: string[] }
+export type FixLink = {
+  id: string; analysisId: string; mediaId: string; applied: string[]; usedAutoEdit: boolean
+  analysis: { createdAt?: string | null; score?: number | null; summary?: string; duration?: number | null }
+  reel: null | { n: number; postedAt: string | null; duration_s: number | null; permalink: string | null; caption: string }
+  result: LinkResult | null
+}

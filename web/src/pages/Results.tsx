@@ -1000,7 +1000,7 @@ export default function Results({ injected }: { injected?: Record<string, unknow
             )}
 
             {/* ═══ Hackathon: Modal-served prediction (evqa / qwen_zero_shot) + Q-Align visual quality signal ═══ */}
-            {canSeePrediction && (!result.engagementPrediction || result.engagementPrediction.source === 'evqa' || result.engagementPrediction.source === 'qwen_zero_shot') && (
+            {canSeePrediction && (!result.engagementPrediction || !result.engagementPrediction.source || result.engagementPrediction.source === 'evqa' || result.engagementPrediction.source === 'qwen_zero_shot') && (
               <ViewerBehaviourCard ep={result.engagementPrediction} />
             )}
 

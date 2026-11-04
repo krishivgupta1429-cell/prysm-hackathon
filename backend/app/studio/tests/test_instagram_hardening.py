@@ -17,7 +17,7 @@ from app.studio import config
 from app.studio.instagram import dna as D
 from app.studio.instagram import grounding as G
 from app.studio.instagram import importer, oauth, personalise, tokencrypt
-from app.studio.instagram.models import CreatorDna, IgAccount, IgReel
+from app.studio.instagram.models import CreatorDna, IgAccount, IgFixLink, IgReel
 from app.studio.tests.test_instagram import Ask, FakeSource, Redis, aio, dbf, fp, make_user, reel
 
 
@@ -758,3 +758,116 @@ def test_the_fixture_has_deterministic_fake_hook_words_for_talking_reels_only():
     talk = src.fixture_hook_words({"_fixture_index": 1})
     assert talk.status == "transcribed" and talk.text and talk.cost_usd == 0.0
     assert src.fixture_hook_words({"_fixture_index": 0}).status == "no_speech"                 # b-roll: nothing spoken
+
+
+# =================================================================== phase 4: did my fix work?
+
+from datetime import datetime, timedelta, timezone  # noqa: E402,F811
+from app.studio.instagram import closeloop  # noqa: E402
+
+T0 = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def lr(n, days_after=None, dur=20.0, wt=0.5, reach=1000.0, saved=10.0, shares=5.0, skip=50.0, posted=None):
+    return {"n": n, "media_id": f"m{n}", "posted_at": posted or (T0 + timedelta(days=days_after if days_after is not None else n)), "duration_s": dur,
+            "watch_through": wt, "permalink": f"https://x/{n}", "caption": "c",
+            "insights": {"reach": reach, "views": None if reach is None else reach * 1.5, "saved": saved, "shares": shares, "reels_skip_rate": skip}}
+
+
+def test_advice_items_are_the_top_priorities_plus_fixes_of_weak_parameters_without_duplicates():
+    a = {"top_priorities": ["Open on the result", "open on the result", "Cut the intro"],
+         "parameters": [{"name": "Hook", "score": 40, "fix": "Use a question hook"}, {"name": "Audio", "score": 90, "fix": "Keep the audio"},
+                        {"name": "Text", "score": 30, "advisory": True, "fix": "Add captions"}, {"name": "Pace", "score": 55, "fix": "Cut the intro"}]}
+    assert [x["text"] for x in closeloop.advice_items(a)] == ["Open on the result", "Cut the intro", "Use a question hook"]
+    assert [x["id"] for x in closeloop.advice_items(a)] == ["a0", "a1", "a2"]
+
+
+def test_suggest_matches_prefers_the_reel_posted_soon_after_with_about_the_same_length():
+    reels = [lr(1, days_after=-5), lr(2, days_after=2, dur=40.0), lr(3, days_after=3, dur=22.0), lr(4, days_after=30, dur=22.0), lr(5, posted=None) | {"posted_at": None}]
+    out = closeloop.suggest_matches(T0, 22.0, reels)
+    assert [x["n"] for x in out] == [3, 2] and out[0]["likely"] is True and out[1]["likely"] is False       # before the analysis, 30 days later and undated are out
+    assert any("length matches" in r for r in out[0]["reasons"]) and any("length differs" in r for r in out[1]["reasons"])
+    assert closeloop.suggest_matches(None, 22.0, reels) == []
+    assert closeloop.suggest_matches(T0, None, [lr(1, days_after=2)])[0]["likely"] is True            # date only: close enough to suggest
+
+
+def test_before_after_compares_with_the_median_of_the_other_reels_in_plain_words():
+    others = [lr(i, wt=0.40, reach=1000, saved=10, shares=5, skip=60) for i in range(1, 6)]
+    linked = lr(9, wt=0.55, reach=1250, saved=30, shares=2, skip=45)
+    r = closeloop.before_after(linked, others, now=T0 + timedelta(days=30))
+    rows = {x["key"]: x for x in r["rows"]}
+    assert r["basedOn"] == 5 and r["lagging"] is False
+    assert rows["reach_vs_usual"]["plainText"] == "Reach 25% above your usual" and rows["reach_vs_usual"]["direction"] == "better"
+    assert rows["watch_through"]["direction"] == "better" and rows["watch_through"]["valueText"] == "55%" and rows["watch_through"]["usualText"] == "40%"
+    assert rows["saves_per_reach"]["valueText"] == "24.0" and rows["saves_per_reach"]["usualText"] == "10.0" and rows["saves_per_reach"]["direction"] == "better"
+    assert rows["shares_per_reach"]["direction"] == "worse"                                               # 1.6 vs 5.0 per 1,000
+    assert rows["skip_rate"]["direction"] == "better"                                                     # lower skip rate is better
+    assert (r["better"], r["worse"], r["compared"]) == (4, 1, 5)
+    assert any("not proof" in n for n in r["notes"]) and any("5 imported reels" in n for n in r["notes"])
+
+
+def test_before_after_never_invents_numbers_and_flags_lag_and_tiny_samples():
+    others = [lr(1, wt=None, reach=1000)]
+    young = lr(9, wt=None, reach=None, saved=None, shares=None, skip=None, posted=T0)
+    young["insights"] = {k: None for k in young["insights"]}
+    r = closeloop.before_after(young, others, now=T0 + timedelta(hours=10))
+    assert r["lagging"] is True and all(x["direction"] == "none" and x["note"] for x in r["rows"]) and r["compared"] == 0
+    assert any("48 hours" in n for n in r["notes"]) and any("rough guide" in n for n in r["notes"])
+    none = closeloop.before_after(lr(2), [], now=T0 + timedelta(days=30))
+    assert all(x["direction"] == "none" for x in none["rows"]) and none["basedOn"] == 0
+    assert {x["key"]: x for x in none["rows"]}["watch_through"]["note"] == "no usual to compare with yet"
+    zero = closeloop.before_after(lr(3, saved=0.0), [lr(4, saved=0.0)], now=T0 + timedelta(days=30))
+    assert {x["key"]: x for x in zero["rows"]}["saves_per_reach"]["direction"] == "same"                  # a real 0 vs a real 0
+
+
+@aio
+async def test_links_survive_a_reimport_are_replaced_per_analysis_and_deleted_on_disconnect(monkeypatch):
+    async def fake_ask(content, max_tokens, spend, *, system=None):
+        spend.add(0.001)
+        return json.dumps({"hook_type": "question", "format": "talking_head", "pacing": "fast", "audio_type": "speech", "on_screen_text": True, "topic": "t"})
+    monkeypatch.setattr(D, "_ask", fake_ask)
+    async with dbf() as factory:
+        uid = await make_user(factory)
+        aid = uuid.uuid4()
+        async with factory() as db:
+            await db.execute(text("INSERT INTO prysm_analyses (id, user_id, created_at, overall_score, summary, top_priorities, parameters, raw_result) "
+                                  "VALUES (:i, :u, :c, 63, 'Strong angle', CAST(:tp AS JSON), CAST(:pa AS JSON), CAST(:rr AS JSON))"),
+                             {"i": aid, "u": uid, "c": datetime.now(timezone.utc) - timedelta(days=20), "tp": json.dumps(["Open on the result", "Cut the intro"]),
+                              "pa": json.dumps([{"name": "Hook", "score": 40, "fix": "Use a question hook"}]), "rr": json.dumps({"energyCurve": {"duration": 22.0}})})
+            await oauth.save_connection(db, uid, token="tok", ig_user_id="ig1", username="me", account_type="BUSINESS", expires_in=3600, scopes="a", is_fixture=True)
+            await db.commit()
+        await importer.run_import(redis=Redis(), session_factory=factory, user_id=uid, count=5, job_id="jl", source=FakeSource(5))
+        async with factory() as db:
+            lst = await closeloop.list_analyses(db, uid)
+            assert len(lst) == 1 and lst[0]["duration_s"] == 22.0 and [a["text"] for a in lst[0]["advice"]] == ["Open on the result", "Cut the intro", "Use a question hook"]
+            link = await closeloop.save_link(db, uid, lst[0], "m2", ["Open on the result", "Cut the intro"], used_auto_edit=False)
+            again = await closeloop.save_link(db, uid, lst[0], "m3", ["Cut the intro"], used_auto_edit=False)          # linking again replaces
+            data = await personalise.load(db, uid)
+            out = await closeloop.links_with_results(db, uid, data["reels"])
+            assert len(out) == 1 and out[0]["mediaId"] == "m3" and out[0]["applied"] == ["Cut the intro"] and out[0]["id"] == str(again.id) != str(link.id)
+            assert out[0]["result"]["basedOn"] == 4 and out[0]["reel"]["n"] >= 1
+        await importer.run_import(redis=Redis(), session_factory=factory, user_id=uid, count=5, job_id="jl2", source=FakeSource(5))    # re-import replaces every reel row
+        async with factory() as db:
+            data = await personalise.load(db, uid)
+            out = await closeloop.links_with_results(db, uid, data["reels"])
+            assert len(out) == 1 and out[0]["reel"] is not None and out[0]["result"] is not None                       # the link found its reel again by media id
+            counts = await oauth.disconnect(db, uid)
+            assert counts["links"] == 1
+            assert (await db.execute(select(IgFixLink).where(IgFixLink.user_id == uid))).scalars().all() == []
+
+
+def test_new_video_hook_words_come_from_the_first_12_seconds_of_the_analysis_transcript():
+    words = [{"word": w, "start": float(i)} for i, w in enumerate("Stop scrolling right now because your hook is flopping badly today my friend we fix it".split())]
+    out = personalise.new_hook_words({"audioAnalysis": {"words": words}})
+    assert out.startswith("Stop scrolling right now") and len(out.split()) == 12 and "fix it" not in out            # words after 12 s are left out
+    assert personalise.new_hook_words({"audioAnalysis": {"hookText": "Thank you"}}) == "Thank you"
+    assert personalise.new_hook_words({"audioAnalysis": {"hookText": "Hi"}}) is None and personalise.new_hook_words({}) is None
+
+
+def test_the_comparison_card_lists_the_cited_reels_in_plain_language():
+    reels = [mk(1) | {"hook_words": "Stop scrolling", "vs_usual": {"label": "Reach 25% above your usual"}},
+             mk(2) | {"hook_words": None, "vs_usual": {"label": "Reach 40% below your usual"}, "partial": True}]
+    data = {"reels": [{**r, "partial": r.get("partial", False)} for r in reels]}
+    out = personalise.cited_reels(data, [1], [2])
+    assert [(o["n"], o["group"], o["vsUsual"], o["hookWords"], o["partial"]) for o in out] == [
+        (1, "strongest", "Reach 25% above your usual", "Stop scrolling", False), (2, "weakest", "Reach 40% below your usual", None, True)]

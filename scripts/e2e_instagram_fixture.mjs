@@ -3,6 +3,7 @@
 // test user ig.tester@example.org). Needs web/node_modules (playwright-core). Usage: node scripts/e2e_instagram_fixture.mjs <analysis result.json>
 import { createRequire } from 'module'
 import fs from 'fs'
+import { execFileSync } from 'child_process'
 const require = createRequire(new URL('../web/', import.meta.url).pathname)
 const { chromium } = require('playwright-core')
 const OUT = process.env.E2E_SHOTS || '/tmp/ig-e2e-shots'
@@ -112,7 +113,7 @@ check('metrics show real numbers and "no data yet" instead of 0', /Views/.test(r
 check('hook words line on every reel', (await page.$$('[data-testid=hook-words]')).length === 8)
 const hookTexts = await page.$$eval('[data-testid=hook-words]', els => els.map(e => e.textContent.replace(/\s+/g, ' ')))
 check('talking reels show their hook words in quotes; b-roll says no speech; the video-less reel says unknown (no video file)',
-  hookTexts.some(t => /Hook words: .Why do your reels flop/.test(t)) && hookTexts.some(t => /no speech in the first seconds/.test(t)) && hookTexts.some(t => /unknown \(no video file from Instagram\)/.test(t)), hookTexts.join(' | ').slice(0, 200))
+  hookTexts.some(t => /Hook words: .?Why do your reels flop/.test(t)) && hookTexts.some(t => /no speech in the first seconds/.test(t)) && hookTexts.some(t => /unknown \(no video file from Instagram\)/.test(t)), hookTexts.join(' | ').slice(0, 200))
 check('exactly one reel carries the thumbnail-only badge', (await page.$$('[data-testid=partial-badge]')).length === 1)
 const partialCard = await page.$('[data-testid=reel-row]:has([data-testid=partial-badge])')
 const partialText = (await partialCard.textContent()).replace(/\s+/g, ' ')
@@ -130,6 +131,34 @@ if (longCard) {
   check('"Show full caption" reveals the whole caption', full.length > cut.length && !full.endsWith('…'))
 }
 await shot('06-imported')
+
+// 4b. "Did my fix work?": a saved analysis (inserted for the test user, 14 days old, 22 s long) linked to the reel posted after it
+const PSQL = process.env.E2E_PSQL || '/opt/homebrew/opt/postgresql@18/bin/psql'
+const psql = (sql) => execFileSync(PSQL, ['-h', '127.0.0.1', '-p', process.env.E2E_PGPORT || '55436', '-U', 'prysm', process.env.E2E_PGDB || 'prysm_ig', '-Atc', sql]).toString().trim()
+psql("DELETE FROM prysm_analyses WHERE id = '00000000-0000-4000-8000-0000000000e2'")
+psql(`INSERT INTO prysm_analyses (id, user_id, created_at, overall_score, summary, top_priorities, parameters, raw_result, intent, is_public)
+  SELECT '00000000-0000-4000-8000-0000000000e2', id, now() - interval '9 days', 58, 'Strong angle, slow start', '["Open on the result in the first second","Add a re-hook at 9 seconds"]'::json,
+  '[{"name":"Hook","score":40,"fix":"Use a question hook"}]'::json, '{"energyCurve":{"duration":22.0}}'::json, 'my_video', false FROM users WHERE email = 'ig.tester@example.org'`)
+await page.reload(); await page.waitForSelector('[data-testid=fix-loop]')
+check('"Did my fix work?" section is shown with an open button', await page.isVisible('[data-testid=fix-open]'))
+await page.click('[data-testid=fix-open]')
+await page.selectOption('[data-testid=fix-analysis]', '00000000-0000-4000-8000-0000000000e2')
+check('the likely reel is suggested by date and length', /Reel 2 .*likely match/.test(await page.$eval('[data-testid=fix-reel]', el => el.selectedOptions[0].textContent)) && /length matches/.test(await page.textContent('[data-testid=fix-why]')))
+await page.check('text=Open on the result in the first second')
+await shot('08a-fix-form', false)
+await page.click('[data-testid=fix-save]')
+await page.waitForSelector('[data-testid=fix-result]')
+const fx = (await page.textContent('[data-testid=fix-loop]')).replace(/\s+/g, ' ')
+check('result: compared with your other 7 reels, in plain language', /compared with your other 7 reels/.test(fx) && /Reach \d+% (above|below) your usual|Reach about your usual/.test(fx))
+check('result: watch-through, saves, shares per reach and skip rate rows', /Watch-through/.test(fx) && /Saves per 1,000 reached/.test(fx) && /Shares per 1,000 reached/.test(fx) && /Skip rate/.test(fx))
+check('result: names the advice applied', /Advice you applied/.test(fx) && /Open on the result in the first second/.test(fx) && !/Add a re-hook at 9 seconds/.test(fx))
+check('result: honest copy (lag, one reel is not proof, based on N reels)', /48 hours/.test(fx) && /not proof/.test(fx) && /median of your other 7/.test(fx) && !/it worked|fix worked/i.test(fx))
+await shot('08b-fix-result')
+await page.click('[data-testid=fix-unlink]')
+await page.waitForSelector('[data-testid=fix-link]', { state: 'detached' })
+check('a link can be removed', (await (await api('/instagram/links')).json()).links.length === 0)
+await page.click('[data-testid=fix-open]'); await page.selectOption('[data-testid=fix-analysis]', '00000000-0000-4000-8000-0000000000e2')
+await page.click('[data-testid=fix-save]'); await page.waitForSelector('[data-testid=fix-result]')   // linked again: used by the disconnect check below
 
 // 5. keyboard: tab reaches the account menu and the slider; menu opens with Enter
 await page.keyboard.press('Home')
@@ -161,6 +190,8 @@ check('comparison card shown', await page.isVisible('[data-testid=creator-dna-ca
 const card = await page.textContent('[data-testid=creator-dna-card]')
 check('comparison card: title with N', new RegExp('How this compares to your last ' + result.creatorDna.sampleSize + ' reels').test(card))
 check('comparison card: cites reels', /Reels? \d/.test(card))
+check('comparison card: plain-language reach for the cited reels, no index numbers', /Reach \d+% (above|below) your usual|Reach about your usual/.test(card) && !/index \d\.\d\d/.test(card), card.replace(/\s+/g, ' ').slice(0, 160))
+check('comparison card: shows the first words of the new video and of the cited reels', await page.isVisible('[data-testid=new-hook-words]') && (await page.$$('[data-testid=cited-reel]')).length >= 2 && /Opens with|Opening words unknown/.test(card))
 if (result.creatorDna.partialReels && result.creatorDna.partialReels.length) check('comparison card: says which reels were read without video', /read from the thumbnail and caption only/.test(await page.textContent('[data-testid=partial-line]')))
 check('results: grounding stats saved with the analysis', !!result.creatorDna.grounding && typeof result.creatorDna.grounding.checked === 'number', JSON.stringify(result.creatorDna.grounding))
 await page.screenshot({ path: `${OUT}/06-results-personalised.png`, fullPage: false })
@@ -185,6 +216,8 @@ await page.waitForSelector('[data-testid=consent]')
 check('after disconnect: consent screen again', true)
 const dna = await (await api('/instagram/dna')).json()
 check('after disconnect: API has no DNA or reels', dna.connected === false)
+check('after disconnect: the analysis link is deleted too', psql("SELECT count(*) FROM ig_fix_link WHERE analysis_id = '00000000-0000-4000-8000-0000000000e2'") === '0')
+psql("DELETE FROM prysm_analyses WHERE id = '00000000-0000-4000-8000-0000000000e2'")
 await shot('10-disconnected')
 
 // 7. results page when not connected: no bars, a connect line

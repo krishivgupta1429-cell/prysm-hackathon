@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { AccountCard } from './creator/AccountCard'
 import { Consent } from './creator/Consent'
 import { DnaCard } from './creator/DnaCard'
+import { FixLoop } from './creator/FixLoop'
 import { ImportCard } from './creator/ImportCard'
 import { ReelCard } from './creator/ReelCard'
 import type { DnaResp, Job, Status } from './creator/types'
@@ -32,6 +33,7 @@ export default function CreatorDna() {
   const timer = useRef<number | null>(null)
   const importRef = useRef<HTMLDivElement>(null)
   const countSet = useRef(false)
+  const [reloadKey, setReloadKey] = useState(0)
 
   const load = useCallback(async () => {
     setLoadError('')
@@ -42,7 +44,7 @@ export default function CreatorDna() {
       setStatus(st)
       if (!st.connected) { setDna(null); return }
       const d = await authFetch(apiUrl('/instagram/dna'))
-      if (d.ok) setDna(await d.json())
+      if (d.ok) { setDna(await d.json()); setReloadKey(k => k + 1) }
       let mx = st.limits.max
       try {   // how many reels the account has (one cached Instagram call at most)
         const a = await authFetch(apiUrl('/instagram/available'))
@@ -174,6 +176,8 @@ export default function CreatorDna() {
             {dna?.dna && dna.dna.data.mode !== 'breakdown' && (
               <DnaCard dna={dna.dna} reels={reels} fixture={fixture} missing={lastMissing} metricLabels={dna.metricLabels} onOpen={setOpenReel} />
             )}
+
+            {reels.length > 0 && <FixLoop reels={reels} reloadKey={reloadKey} onOpen={setOpenReel} />}
 
             {status.account?.lastImportAt && reels.length === 0 && !busy && (
               <div className="rounded-2xl border border-dashed border-border p-6 text-center" data-testid="empty-reels">

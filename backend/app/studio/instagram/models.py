@@ -87,3 +87,20 @@ class CreatorDna(Base):
     model = Column(String(60))
     cost_usd = Column(Float, default=0.0)
     created_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class IgFixLink(Base):
+    """"Did my fix work?": a Prysm analysis linked to the reel the creator posted after it, and which advice they applied.
+    Keyed by the reel's Instagram media id (not its row), so a re-import (which replaces the rows) keeps the link.
+    Deleted on disconnect with everything else derived from the account."""
+    __tablename__ = "ig_fix_link"
+    __table_args__ = (UniqueConstraint("user_id", "analysis_id", name="uq_ig_fix_link_user_analysis"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    analysis_id = Column(UUID(as_uuid=True), nullable=False)          # prysm_analyses.id (no foreign key: separate lifecycle)
+    media_id = Column(String(60), nullable=False)                     # the reel's Instagram media id
+    applied = Column(JSON)                                            # the advice the creator says they applied (the texts)
+    used_auto_edit = Column(Boolean, nullable=False, default=False)
+    analysis_snapshot = Column(JSON)                                  # {"createdAt", "score", "summary", "duration"}: still shown if the analysis is deleted
+    created_at = Column(DateTime(timezone=True), default=utcnow)

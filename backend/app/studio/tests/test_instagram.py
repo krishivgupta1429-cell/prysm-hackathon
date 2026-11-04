@@ -24,7 +24,7 @@ from app.core.config import settings
 from app.studio.instagram import dna as D
 from app.studio.instagram import graph, importer, oauth, personalise
 from app.studio.instagram import metrics as M
-from app.studio.instagram.models import CreatorDna, IgAccount, IgReel, IgReelInsight
+from app.studio.instagram.models import CreatorDna, IgAccount, IgFixLink, IgReel, IgReelInsight
 from app.studio.tests.fake_redis import FakeRedis
 
 
@@ -421,7 +421,9 @@ async def dbf():
         from app.models.user import User
         async with engine.begin() as conn:
             await conn.run_sync(lambda sc: Base.metadata.create_all(sc, tables=[
-                User.__table__, IgAccount.__table__, IgReel.__table__, IgReelInsight.__table__, CreatorDna.__table__]))
+                User.__table__, IgAccount.__table__, IgReel.__table__, IgReelInsight.__table__, CreatorDna.__table__, IgFixLink.__table__]))
+            await conn.execute(text("CREATE TABLE IF NOT EXISTS prysm_analyses (id UUID PRIMARY KEY, user_id UUID, created_at TIMESTAMPTZ, overall_score INT, summary TEXT, "
+                                    "top_priorities JSON, parameters JSON, edited_video_key TEXT, raw_result JSON, intent TEXT)"))   # the columns the close-the-loop code reads
             await conn.execute(text("ALTER TABLE ig_reel ADD COLUMN IF NOT EXISTS analysis_level VARCHAR(20)"))   # older throwaway database
             await conn.execute(text("ALTER TABLE ig_reel ADD COLUMN IF NOT EXISTS thumbnail_url TEXT"))
             await conn.execute(text("ALTER TABLE ig_account ADD COLUMN IF NOT EXISTS profile_picture_url TEXT"))

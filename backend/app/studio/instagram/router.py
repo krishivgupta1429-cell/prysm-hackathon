@@ -17,7 +17,7 @@ from app.core.cache import redis_client
 from app.core.database import AsyncSessionLocal, get_db
 from app.core.security import decode_token, get_current_user
 from app.models.user import User
-from app.studio.instagram import fixtures, importer, oauth, personalise
+from app.studio.instagram import closeloop, fixtures, importer, oauth, personalise
 from app.studio.instagram import metrics as M
 from app.studio.instagram.graph import InstagramSource
 
@@ -195,6 +195,59 @@ async def creator_dna(user: User = Depends(get_current_user), db: AsyncSession =
                                          "model": row.model, "costUsd": row.cost_usd, "createdAt": _iso(row.created_at)},
         "reels": reels, "metricLabels": M.METRIC_LABEL,
     }
+
+
+class LinkBody(BaseModel):
+    analysisId: str
+    mediaId: str
+    applied: list[str] = []
+    usedAutoEdit: bool = False
+
+
+@router.get("/analyses")
+async def analyses(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """The user's saved Prysm analyses with the advice they can tick as applied, and the likely posted reel for each (by date and length)."""
+    data = await personalise.load(db, user.id)
+    reels = data["reels"] if data else []
+    linked = {l["analysisId"]: l for l in await closeloop.links_with_results(db, user.id, reels)} if data else {}
+    out = []
+    for a in await closeloop.list_analyses(db, user.id):
+        out.append({"id": a["id"], "createdAt": _iso(a["created_at"]), "score": a["score"], "summary": a["summary"], "durationS": a["duration_s"],
+                    "hasEditedVideo": a["has_edited_video"], "advice": a["advice"], "linked": a["id"] in linked,
+                    "suggestions": closeloop.suggest_matches(a["created_at"], a["duration_s"], reels)[:3]})
+    return {"analyses": out}
+
+
+@router.get("/links")
+async def links(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    data = await personalise.load(db, user.id)
+    return {"links": await closeloop.links_with_results(db, user.id, data["reels"] if data else []), "reelCount": len(data["reels"]) if data else 0}
+
+
+@router.post("/links")
+async def create_link(body: LinkBody, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    data = await personalise.load(db, user.id)
+    if data is None or not any(r["media_id"] == body.mediaId for r in data["reels"]):
+        raise HTTPException(404, "That reel is not in your imported reels. Re-import after you post it.")
+    found = next((a for a in await closeloop.list_analyses(db, user.id, 200) if a["id"] == body.analysisId), None)
+    if found is None:
+        raise HTTPException(404, "That analysis was not found.")
+    valid = {x["text"] for x in found["advice"]}
+    link = await closeloop.save_link(db, user.id, found, body.mediaId, [t for t in body.applied if t in valid], body.usedAutoEdit and found["has_edited_video"])
+    mine = [l for l in await closeloop.links_with_results(db, user.id, data["reels"]) if l["id"] == str(link.id)]
+    return {"link": mine[0] if mine else None}
+
+
+@router.delete("/links/{link_id}")
+async def remove_link(link_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    import uuid as _uuid
+    try:
+        lid = _uuid.UUID(link_id)
+    except ValueError:
+        raise HTTPException(404, "Unknown link.")
+    if not await closeloop.delete_link(db, user.id, lid):
+        raise HTTPException(404, "Unknown link.")
+    return {"detail": "Link removed."}
 
 
 @router.get("/measured")

@@ -14,7 +14,7 @@ import httpx
 from sqlalchemy import delete, select, update
 
 from app.studio import config
-from app.studio.instagram.models import CreatorDna, IgAccount, IgReel, IgReelInsight
+from app.studio.instagram.models import IgFixLink, CreatorDna, IgAccount, IgReel, IgReelInsight
 
 log = logging.getLogger(__name__)
 
@@ -283,6 +283,7 @@ async def _delete_derived(db, acct: IgAccount) -> dict:
         res = await db.execute(delete(IgReelInsight).where(IgReelInsight.reel_id.in_(reel_ids)))
         counts["insights"] = res.rowcount or 0
     await db.execute(delete(CreatorDna).where(CreatorDna.account_id == acct.id))
+    counts["links"] = (await db.execute(delete(IgFixLink).where(IgFixLink.user_id == acct.user_id))).rowcount or 0
     await db.execute(delete(IgReel).where(IgReel.account_id == acct.id))
     return counts
 

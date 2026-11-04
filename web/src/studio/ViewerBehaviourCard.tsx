@@ -33,7 +33,7 @@ const SOURCE_LABEL: Record<string, string> = { evqa: 'LMM-EVQA', qwen_zero_shot:
 const HOOK: Record<string, string> = { low: 'strong hook', medium: 'average hook', high: 'weak hook' }
 const RETAIN: Record<string, string> = { low: 'high retention', medium: 'average retention', high: 'low retention' }
 
-const box: CSSProperties = { border: '1px solid #e5e5e5', borderRadius: 16, padding: 20, background: '#fff', color: '#0a0a0a' }
+const box: CSSProperties = { border: '1px solid hsl(var(--border))', borderRadius: 16, padding: 20, background: 'hsl(var(--background))', color: 'hsl(var(--foreground))' }
 const tag: CSSProperties = { fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', padding: '2px 8px', border: '1px solid #d4d4d4', borderRadius: 999, color: '#737373', whiteSpace: 'nowrap' }
 const sub: CSSProperties = { fontSize: 12, color: '#737373', margin: '4px 0 16px', lineHeight: 1.4 }
 const track: CSSProperties = { height: 8, background: '#f0f0f0', borderRadius: 999, overflow: 'hidden' }
