@@ -829,7 +829,7 @@ export default function Results({ injected }: { injected?: Record<string, unknow
                       <button className="w-4 h-4 rounded-full border border-foreground/15 bg-foreground/[0.04] flex items-center justify-center text-foreground/30 hover:text-foreground/60 hover:border-foreground/30 transition-colors cursor-default text-[9px] font-bold leading-none">
                         ?
                       </button>
-                      <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 opacity-0 group-hover/bands:opacity-100 pointer-events-none transition-opacity duration-150 z-[200] w-[210px]">
+                      <div className="absolute right-0 sm:right-auto sm:left-1/2 sm:-translate-x-1/2 top-full mt-2 opacity-0 group-hover/bands:opacity-100 pointer-events-none transition-opacity duration-150 z-[200] w-[210px]">
                         {/* Arrow */}
                         <div className="flex justify-center mb-0">
                           <div className="w-2.5 h-2.5 bg-foreground rotate-45 -mb-1.5 relative z-10" />

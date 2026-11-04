@@ -107,7 +107,8 @@ function Stepper({ st }: { st: State }) {
   const cur = stageIndex(st.phase)
   return (
     <div data-testid="stepper">
-      <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+      {!st.running && <p style={{ ...muted, margin: 0 }} data-testid="stepper-done">All {STAGES.length - 1} stages finished: reading, planning, previews, checks and the final render.</p>}
+      {st.running && <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
         {STAGES.map((s, i) => {
           const state = st.running ? (i < cur ? 'done' : i === cur ? 'now' : 'todo') : 'done'
           return (
@@ -123,7 +124,7 @@ function Stepper({ st }: { st: State }) {
             </li>
           )
         })}
-      </ol>
+      </ol>}
       <details style={{ marginTop: 8 }} data-testid="activity-log">
         <summary style={{ ...muted, cursor: 'pointer', fontWeight: 600 }}>Activity log</summary>
         <ol style={{ margin: '6px 0 0', padding: 0, listStyle: 'none', maxHeight: 220, overflowY: 'auto' }} data-testid="auto-edit-trace">
@@ -184,11 +185,11 @@ function ManualTips({ tips }: { tips: Tip[] }) {
   const li = (t: Tip, i: number) => <li key={i} style={{ fontSize: 13, lineHeight: 1.5, color: '#404040', marginBottom: 6 }}>{t.tip}{t.why_manual ? <span style={{ color: '#a3a3a3' }}> ({t.why_manual})</span> : null}</li>
   return (
     <>
-      <ul style={{ margin: 0, paddingLeft: 18 }}>{tips.slice(0, 5).map(li)}</ul>
+      <ul style={{ margin: 0, paddingLeft: 18, listStyle: 'disc' }}>{tips.slice(0, 5).map(li)}</ul>
       {tips.length > 5 && (
         <details style={{ marginTop: 4 }} data-testid="tips-more">
           <summary style={{ ...btn2, display: 'inline-block', padding: '5px 14px', fontSize: 12, cursor: 'pointer', listStyle: 'none' }}>{tips.length - 5} more</summary>
-          <ul style={{ margin: '10px 0 0', paddingLeft: 18 }}>{tips.slice(5).map((t, i) => li(t, i + 5))}</ul>
+          <ul style={{ margin: '10px 0 0', paddingLeft: 18, listStyle: 'disc' }}>{tips.slice(5).map((t, i) => li(t, i + 5))}</ul>
         </details>
       )}
     </>
@@ -394,7 +395,7 @@ function EditStudio({ analysisId }: { analysisId?: string }) {
               {st.final?.has_captions && <><button style={btn2} onClick={() => download('srt', 'captions.srt')}>Captions SRT</button><button style={btn2} onClick={() => download('ass', 'captions.ass')}>Captions ASS</button></>}
               <button style={btn2} onClick={() => download('edl', 'edit-list.json')}>Edit list JSON</button>
             </div>
-            <ol style={{ margin: 0, paddingLeft: 18 }} data-testid="export-steps">
+            <ol style={{ margin: 0, paddingLeft: 20, listStyle: 'decimal' }} data-testid="export-steps">
               <li style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 6 }}>Download the MP4 and get it onto your phone (AirDrop, a cloud drive or an email to yourself).</li>
               <li style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 6 }}>In the Instagram Edits app, start a new project and add that MP4 from your camera roll. The captions are already part of the video.</li>
               <li style={{ fontSize: 13, lineHeight: 1.5 }}>To change captions or cuts there, use the SRT, the ASS and the edit list as a reference to retype lines and re-place cuts. Edits is not known to import them.</li>
