@@ -108,3 +108,37 @@ Goal: the first round kept 1 of 5-7 planned changes per video (the output looked
 * The critic is one model's opinion (and cannot hear in frame-strip fallback); on 4 of 5 videos it only flagged duplicated text. Its per-moment times are used to drop single cuts; the remaining cuts are not watched again as a set.
 * Cuts that remove speech are RISKY: the saree's tail cut (6 s of the closing call to action area) was approved by the critic; a creator may still prefer to keep it (toggle).
 * Spend this round (Meta): about $3.5 including two analyses (~$0.7), ~20 edit runs ($0.08-0.17 each) and probes; Modal about $0.05 (Demucs ~$0.005 per music edit).
+
+
+## Round 3: real raw clip, Google Fonts + style packs, retention-driven edits, synthesised sound, UI, critic (done)
+
+Main test: `samples/inputs/raw_test.mp4` (real, 60.5 s, landscape 1620x1080, spoken, -31 LUFS), plus a Hinglish spoken clip (macOS `say` voice Lekha over the same footage), the degraded Video-291 and the three original samples. Backend tests 633+ pass, web build passes, secret scan clean.
+
+**Built (phase by phase, each committed)**
+1. *Filler / dead-air.* Pauses are found from the signal at a level that follows the recording (`ffx.silence_threshold`), shortened to a natural beat and cut exactly; a pitch tracker looks for um/uh-like sounds only where no recognised word explains the audio; a stretch with sound but no words is re-transcribed on its own; the creator-captions rule ignores a logo. The same silence level (shifted by the gain) measures before and after.
+2. *Fonts and packs.* All of Google Fonts (1959 families, open licences, static TTF downloaded on first use, glyph coverage checked, Poppins fallback with a visible note, per-script files so Hindi words use the family's Devanagari file), 7 style packs, Spark picks pack + 3 fonts + emphasis words, captions in 3-5 word chunks with pop / bounce / fade / slide and accent emphasis.
+3. *Retention and sound.* The director call also turns the retention findings into one fix per drop point (sound accent, zoom, caption emphasis, jump cut / trim) with the finding recorded; density limits (1.5 s between effects, 1 sound per 3 s, 2/3/5 per 10 s by intensity); 12 effects synthesised by FFmpeg (ring, shimmer, riser, impact, glitch, scratch, womp-womp, boing, toot, whoosh, pop, ding), calibrated to sit 24 / 22 / 20 dB under the voice with sidechain ducking; swap, remove, global switch; no music.
+4. *UI and critic.* Pack buttons, searchable font picker (categories, live preview), suggested fonts with reasons, intensity, SFX switch, per-change reasons and "Answers: ...", effect swap. The critic also judges caption readability, text over the face, sound masking speech, too many effects and the wrong sound for the moment; a defect with a time reverts only the change nearest it (cuts, zooms, sounds, labels).
+
+**Results (real API, files in `samples/out/`, untracked)**
+
+| Video | Kept | Reverted / off, and why | Time | Cost |
+|---|---|---|---|---|
+| **raw_test.mp4** (real, 60.5 s) | everything, 24 changes in 7 bundles: hook text, 14 pause cuts (60.5 -> 54.3 s, silence share 29 % -> 10 %), captions (145 words, median offset 20 ms), loudness -31.0 -> -14.1 LUFS (peak -12.7 -> -1.5 dBTP), label text, 3 zooms (faces kept), 1 sound accent (pop) | nothing; critic notes one mis-heard caption word ("weight" for "vague") | 93 s | $0.17 |
+| Hinglish spoken (30.8 s) | all 11: hook, 4 pauses (30.8 -> 26.2 s), Hindi captions in Baloo 2 + Hind, loudness -25.2 -> -14.1, zoom, 1 sound accent | none; critic notes "hook" heard as "भूट" | 62 s | $0.11 |
+| degraded 291 (54.4 s, -29 LUFS) | hook, 5 pause cuts (-> 46.7 s, silence 17 % -> 0), loudness -29.2 -> -14.0, labels, zoom | captions (critic: nothing captioned for 17 s of singing) | 96 s | $0.16 |
+| Video-291 (Hindi lyrics) | pacing, loudness (already -14), zoom | captions (critic: the chorus was transcribed as other words) | 96 s | $0.16 |
+| saree (own captions) | loudness, one label, zoom, ducking | captions off (creator's own); one label (duplicates their CTA); speech cut (jarring); sound accent (a comic scratch on elegant posing: wrong sound) | 130 s | $0.14 |
+| dance (sideways) | hook, label, zoom | captions (critic: Tamil / Punjabi lyrics garbled) | 76 s | $0.11 |
+
+Timings: round 2 was 43-107 s; round 3 is 62-130 s (more work: the director call runs in parallel with the planner, 7-8 bundles, sound, per-word fonts). Part of this round was measured while an unrelated process held the machine at load 45-56, which inflated those runs (one raw-clip run took 411 s); the figures above are from runs at load under 25. The raw 60 s landscape clip is the slow case (blurred backdrop, two 1620x1080 decodes per preview); the backdrop is now blurred at 1/8 size.
+
+**Spend this round:** Meta about $4.7 of $6 (two analyses ~$0.65 and ~27 edit runs at $0.08-0.17), Modal about $0.1 of $1.
+
+**Honest remaining problems**
+* Fillers: the real raw clip has no filler word the transcript shows (tested Whisper with and without a priming prompt: none, and the prompt made it invent "hmm, um" on music, so it is not used), and no um/uh-like sound the pitch tracker could find. The improvement that fires on the real clip is pause tightening (14 cuts). Hesitation detection is tested on a synthetic tone only.
+* Captions on sung or noisy-lyric videos are wrong or missing (Whisper cannot transcribe a song); the critic catches it and reverts them (4 of 6 videos), so those videos get no captions. One mis-heard word in a speech video is a note, not a revert.
+* Sound effects: only 0-1 per video were kept; I cannot listen, so the levels are checked by measurement (calibrated loudness, peak < -0.5 dBFS), and the critic's "wrong sound" judgement is the only taste check. The critic reverted a comic scratch on an elegant saree pose.
+* Font fallback is visible but the picker can still choose a family whose Latin file does not match its Devanagari file in weight; max-fonts is fixed at 2 slots (headline, caption), not creator-adjustable.
+* A landscape source is still shown over a blurred copy of itself (no smart reframing).
+* The silence share is a tool measurement relative to the file's loudness; after a high-pass and denoise it can rise a little for reasons other than cuts (Hinglish clip: 36 % -> 21 % after cutting, but a noisy bed is classed differently once filtered).

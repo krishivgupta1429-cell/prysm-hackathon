@@ -194,7 +194,7 @@ def _validate_op(op: Op, inp: Inputs, allowed: list[float]) -> None:
     if op.type in ("trim", "cut_segment"):
         for k in ("start", "end"):
             if p.get("silence"):   # measured from the signal by the system itself: exact, inside the video, not snapped to a transcript time
-                t = _num(p.get(k), k)
+                t = min(max(_num(p.get(k), k), 0.0), dur) if -0.05 <= _num(p.get(k), k) <= dur + 0.05 else _num(p.get(k), k)
                 if not (-1e-6 <= t <= dur + 1e-6):
                     raise ValueError(f"{k}={t:g}s is outside the video (0-{dur:.1f}s)")
                 p[k] = round(t, 3)
@@ -207,8 +207,8 @@ def _validate_op(op: Op, inp: Inputs, allowed: list[float]) -> None:
                     if abs(b - p[k]) > 1e-6:
                         p["beat"] = True  # a beat-synced cut is a RISKY "rhythm" op: it is a matter of taste, not an objective fix
                     p[k] = b
-        if p["end"] - p["start"] < 0.3:
-            raise ValueError("range is shorter than 0.3 s")
+        if p["end"] - p["start"] < (0.1 if p.get("silence") else 0.3):
+            raise ValueError("range is shorter than %s s" % ("0.1" if p.get("silence") else "0.3"))
         if inp.words and not p.get("silence"):   # a cut that takes out anything but clear fillers is a content decision, not dead air
             spans = [(0.0, p["start"]), (p["end"], dur)] if op.type == "trim" else [(p["start"], p["end"])]
             for a, b in spans:
@@ -363,6 +363,8 @@ def validate_edl(raw: dict | EDL, inp: Inputs, style_overrides: dict | None = No
                 op.target_parameter = DEFAULT_TARGET.get(op.group, "")
         except (ValueError, TypeError, KeyError) as e:
             dropped.append({"op": op.model_dump(), "reason": str(e)})
+            if op.id.startswith("auto_"):   # the system's own measured cuts are not advice for the creator
+                continue
             tips.append(Tip(step_id=op.source_step_id, parameter=op.target_parameter, tip=op.reason or f"{op.type} could not be applied",
                             why_manual=f"not applied automatically: {e}"))
             continue

@@ -39,7 +39,7 @@ def test_captions_are_left_off_but_kept_as_a_toggle_when_the_creator_already_has
 
 
 def test_a_logo_or_title_that_never_changes_is_not_the_creators_captions():
-    logo = {"visionData": {"frames": [{"onScreenText": "Prysm theprysm.io"}] * 8}}
+    logo = {"visionData": {"frames": [{"onScreenText": "Brand logo example.org"}] * 8}}
     auto = defaults.build(make_inputs(lufs=-14.0, noise_floor_db=-60.0), logo, STYLE)
     assert ids(auto)["auto_captions"].enabled is True
 
@@ -215,3 +215,50 @@ def test_a_steady_voiced_sound_with_no_word_is_found_as_a_hesitation_and_a_word_
     words = [{"word": "hello", "start": 0.3, "end": 0.8}, {"word": "there", "start": 4.0, "end": 4.5}]
     found = I.find_hesitations(wav, words, -50.0)
     assert len(found) == 1 and 1.9 <= found[0]["start"] <= 2.1 and 2.5 <= found[0]["end"] <= 2.7
+
+
+def test_stretches_with_sound_but_no_recognised_word_are_found():
+    from app.studio.autoedit import inputs as I
+    words = [{"word": "a", "start": 1.0, "end": 1.5}, {"word": "b", "start": 2.0, "end": 2.4}, {"word": "c", "start": 10.0, "end": 10.4}]
+    assert I.uncovered_speech(words, [{"start": 6.0, "end": 7.0}], 14.0) == [(2.7, 6.0), (7.0, 9.7), (10.7, 14.0)]    # margins of 0.3 s round words; silences excluded
+    assert I.uncovered_speech(words[:2], [], 3.0) == []
+
+
+def test_a_slice_the_recogniser_skipped_is_transcribed_on_its_own_and_merged(tmp_path):
+    from app.studio.autoedit import inputs as I
+    clip = make_clip(tmp_path / "c.mp4", seconds=12.0)
+    wav = tmp_path / "a.wav"
+    ffx.extract_wav(clip, wav)
+
+    class R:
+        cost_usd = 0.0001
+
+    class Client:
+        calls = []
+
+        def whisper(self, p, prompt=None):
+            Client.calls.append(prompt)
+            r = R()
+            r.words = [{"word": "late", "start": 1.0, "end": 1.4}, {"word": "words", "start": 1.5, "end": 2.0}]   # relative to the slice
+            return r
+    words = [{"word": "early", "start": 0.5, "end": 1.0}]
+    merged, cost, n = I.recover_gaps(clip, tmp_path, words, [], 12.0, Client(), wav)
+    assert [w["word"] for w in merged][:1] == ["early"] and "late" in [w["word"] for w in merged] and n >= 1 and cost > 0
+    assert Client.calls and Client.calls[0] == I.ASR_PROMPT
+    assert all(merged[i]["start"] <= merged[i + 1]["start"] for i in range(len(merged) - 1))
+
+
+def test_the_silence_level_follows_the_recording_not_a_fixed_number():
+    assert ffx.silence_threshold(-14.0, -50.0) == -35.0 and ffx.silence_threshold(None, None) == -35.0
+    assert ffx.silence_threshold(-25.0, -55.0) == -39.0                   # a quiet file with a quiet room: its own noise + 16 dB
+    assert ffx.silence_threshold(-31.0, -44.0) == -32.0 and ffx.silence_threshold(-31.0, -70.0) == -48.0   # clamped
+
+
+def test_short_tightening_cuts_and_a_silence_to_the_very_end_are_valid_and_a_dropped_system_op_is_not_a_tip():
+    inp = make_inputs(duration=10.0, silences=[{"start": 2.0, "end": 2.5}, {"start": 8.0, "end": 10.004}], words=[], segments=[], fillers=[], has_speech=False, scene_cuts=[],
+                      energy_peaks=[], analysis_times=[], lufs=-14.0, noise_floor_db=-60.0)
+    auto = defaults.build(inp, {}, STYLE)
+    v = E.validate_edl(EDL(ops=[o for o in auto.ops if o.type == "cut_segment"]), inp)
+    assert len(v.edl.ops) == len(v.edl.ops) >= 1 and all(o.params["end"] <= 10.0 for o in v.edl.ops) and v.dropped == []
+    bad = E.validate_edl(EDL(ops=[E.Op(id="auto_x", type="cut_segment", params={"start": 20.0, "end": 21.0, "silence": True})]), inp)
+    assert bad.dropped and bad.edl.manual_tips == []

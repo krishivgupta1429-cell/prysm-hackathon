@@ -102,14 +102,14 @@ OPERATION TYPES (times are seconds of the ORIGINAL video; the system assigns eac
 - music_duck {{"duck_db":-9}}: lowers the music under speech; only when has_music and has_speech and the music clearly competes with the voice
 
 RULES
-- At most {config.PLANNER_MAX_OPS} operations in total, each with: "id" ("o1"...), "type", "source_step_id" (the [id] of the step it implements), "target_parameter" (that step's parameter name), "reason" (one short line), "params".
+- At most {config.PLANNER_MAX_OPS} operations in total, each with: "id" ("o1"...), "type", "source_step_id" (the [id] of the step it implements), "target_parameter" (that step's parameter name), "finding" (the retention / hook finding or drop point from the fix steps that this change answers, short), "reason" (one short line), "params". Choose ONE fix per drop point and keep effects (zoom, sound) at least 1.5 s apart.
 - At most 25% of the video may be removed. Never cut a sentence the hook or payoff depends on.
 - Never invent a timestamp. If a step needs something that is not in the lists (a new shot, re-recording, a different song, posting advice), do NOT make an operation: add it to "manual_tips" instead.
 - Prefer few strong operations over many weak ones; an empty "ops" list is fine when no step needs one.
 - Preset for style: "{preset}" ({json.dumps({k: v for k, v in style.items() if k in ('zoom_scale','zoom_max','cut_aggressiveness')})}); at most {style['zoom_max']} zoom punches.
 {retry}
 OUTPUT FORMAT
-{{"ops":[{{"id":"o1","type":"...","source_step_id":"hook#1","target_parameter":"Hook & Opening","reason":"...","params":{{...}}}}],
+{{"ops":[{{"id":"o1","type":"...","source_step_id":"hook#1","target_parameter":"Hook & Opening","finding":"...","reason":"...","params":{{...}}}}],
  "manual_tips":[{{"step_id":"visual#2","parameter":"Visual Quality & Originality","tip":"...","why_manual":"needs a reshoot"}}]}}"""
 
 

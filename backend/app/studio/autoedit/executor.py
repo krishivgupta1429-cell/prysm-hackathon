@@ -76,8 +76,9 @@ def _fit_chain(inp: Inputs, w: int = config.OUT_W, h: int = config.OUT_H) -> str
     if inp.is_9x16 or abs(inp.width / inp.height - 9 / 16) < 0.06:
         return f"scale={w}:{h}:flags={flags},setsar=1"
     k = w / config.OUT_W
-    return (f"split[fa][fb];[fa]scale={w}:{h}:force_original_aspect_ratio=increase,"
-            f"crop={w}:{h},boxblur={max(2, int(40 * k))}:{max(1, int(8 * k))},eq=brightness=-0.08[fbg];"
+    sw, sh = max(2, (w // 8) // 2 * 2), max(2, (h // 8) // 2 * 2)   # the blurred backdrop is made at 1/8 size and scaled up: ~10x cheaper than blurring the full frame
+    return (f"split[fa][fb];[fa]scale={sw}:{sh}:force_original_aspect_ratio=increase,"
+            f"crop={sw}:{sh},boxblur=5:2,scale={w}:{h}:flags=bilinear,eq=brightness=-0.08[fbg];"
             f"[fb]scale={w}:{h}:force_original_aspect_ratio=decrease:flags={flags},setsar=1[ffg];"
             f"[fbg][ffg]overlay=(W-w)/2:(H-h)/2,setsar=1")
 

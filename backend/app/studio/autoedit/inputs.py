@@ -49,6 +49,7 @@ class Inputs:
     true_peak_db: float | None = None
     noise_floor_db: float | None = None                      # level of the quietest 10 % of the audio (dBFS, 50 ms windows)
     speech_level_db: float | None = None                     # level of the loudest 10 %
+    silence_db: float = -35.0                                # the level the silence map was measured at (relative to this file's loudness and noise)
     stats_version: int = 0                                   # 2 = noise floor measured inside silences only (older caches are re-measured)
 
     def to_json(self) -> dict:
@@ -152,6 +153,46 @@ def _accepts_prompt(client) -> bool:
         return "prompt" in inspect.signature(client.whisper).parameters
     except (TypeError, ValueError):
         return False
+
+
+def uncovered_speech(words: list[dict], silences: list[dict], duration: float, min_len: float = 1.8) -> list[tuple[float, float]]:
+    """Stretches of at least `min_len` seconds with sound (not in a detected silence) but no recognised word: where a recogniser gave up
+    (a held or sung passage, speech after a long pause). Margins of 0.3 s around words are not counted."""
+    covered = sorted([(max(w["start"] - 0.3, 0.0), w["end"] + 0.3) for w in words] + [(s["start"], s["end"] if s.get("end") is not None else duration) for s in silences])
+    out, cur = [], 0.0
+    for a, b in covered:
+        if a - cur >= min_len:
+            out.append((round(cur, 2), round(a, 2)))
+        cur = max(cur, b)
+    if duration - cur >= min_len:
+        out.append((round(cur, 2), round(duration, 2)))
+    return out
+
+
+def recover_gaps(video_path, work: Path, words: list[dict], silences: list[dict], duration: float, client, asr_wav: Path) -> tuple[list[dict], float, int]:
+    """Re-transcribe each uncovered stretch on its own (with 0.5 s of margin) and merge the words that fall inside it. Returns (words, cost, stretches).
+    A recogniser that dropped the end of a clip or a passage after a long pause often hears it when given just that slice."""
+    cost, n = 0.0, 0
+    gaps = uncovered_speech(words, silences, duration)[:3]
+    merged = list(words)
+    for i, (a, b) in enumerate(gaps):
+        s0, s1 = max(a - 0.5, 0.0), min(b + 0.5, duration)
+        part = Path(work) / f"gap{i}.wav"
+        try:
+            ffx.run(["-y", "-ss", f"{s0:.2f}", "-t", f"{s1 - s0:.2f}", "-i", str(asr_wav), str(part)])
+            r = client.whisper(part, prompt=ASR_PROMPT) if _accepts_prompt(client) else client.whisper(part)
+        except Exception:
+            continue
+        cost += r.cost_usd
+        added = 0
+        for w in r.words:
+            ws, we = w["start"] + s0, w["end"] + s0
+            if ws >= a - 0.1 and we <= b + 0.2 and not any(abs(ws - x["start"]) < 0.15 for x in merged):
+                merged.append({"word": w["word"], "start": round(ws, 3), "end": round(we, 3)})
+                added += 1
+        n += 1 if added else 0
+    merged.sort(key=lambda w: (w["start"], w["end"]))
+    return merged, cost, n
 
 
 def needs_conditioning(lufs: float | None, noise_floor_db: float | None) -> bool:
@@ -289,9 +330,14 @@ def build_inputs(video_path: str | Path, work_dir: str | Path, analysis: dict | 
     asr_wav = wav16
     if info["has_audio"]:
         ffx.extract_wav(video_path, wav16)
-        silences = ffx.silences(video_path)
-        peaks = energy_peaks(wav16)
         loud = ffx.loudness(video_path)
+        try:
+            p10 = noise_stats(wav16).get("noise_floor_db")
+        except Exception:
+            p10 = None
+        sil_db = ffx.silence_threshold(loud.get("lufs"), p10)
+        silences = ffx.silences(video_path, noise_db=sil_db)
+        peaks = energy_peaks(wav16)
         try:
             noise = noise_stats(wav16)
             noise["noise_floor_db"] = noise_in_silences(wav16, silences)
@@ -306,10 +352,16 @@ def build_inputs(video_path: str | Path, work_dir: str | Path, analysis: dict | 
                 asr_wav = wav16
         if client is not None:
             try:
-                r = client.whisper(asr_wav, prompt=ASR_PROMPT) if _accepts_prompt(client) else client.whisper(asr_wav)
+                r = client.whisper(asr_wav)   # an unprimed call: priming with filler words made the recogniser invent 'hmm, um' on music and did not add any real filler
                 words, segments, language, asr_cost = r.words, r.segments, r.language or "unknown", r.cost_usd
             except Exception:
                 words = []
+        if words and client is not None and len(words) >= 3 and not detect_music(analysis):
+            try:
+                words, extra_cost, _n = recover_gaps(video_path, work, words, silences, dur, client, asr_wav)
+                asr_cost += extra_cost
+            except Exception:
+                pass
         if not words:
             aa = (analysis or {}).get("audioAnalysis") or {}
             words, segments, language = aa.get("words") or [], aa.get("segments") or [], aa.get("language") or "unknown"
@@ -321,7 +373,7 @@ def build_inputs(video_path: str | Path, work_dir: str | Path, analysis: dict | 
         for t, ctx in parse_times(st["text"], dur):
             analysis_times.append({"t": t, "step_id": st["id"], "context": ctx})
     hes = []
-    if info["has_audio"] and len(words) >= 3:
+    if info["has_audio"] and len(words) >= 3 and not detect_music(analysis):   # with music a steady voiced sound is a note, not a hesitation
         try:
             hes = find_hesitations(wav16, words, noise.get("noise_floor_db"))
         except Exception:
@@ -339,4 +391,4 @@ def build_inputs(video_path: str | Path, work_dir: str | Path, analysis: dict | 
                   is_9x16=info["is_9x16"], has_audio=info["has_audio"], language=language, words=words, segments=segs,
                   scene_cuts=cuts, silences=silences, energy_peaks=peaks, has_music=has_music,
                   has_speech=len(words) >= 3, beats=beats, bpm=bpm, music_driven=music_driven, analysis_times=analysis_times,
-                  stats_version=2, lufs=loud.get("lufs"), true_peak_db=loud.get("true_peak_db"), noise_floor_db=noise.get("noise_floor_db"), speech_level_db=noise.get("speech_level_db"), fillers=find_fillers(words), hesitations=hes, asr_cost_usd=asr_cost)
+                  stats_version=2, silence_db=locals().get('sil_db', -35.0), lufs=loud.get("lufs"), true_peak_db=loud.get("true_peak_db"), noise_floor_db=noise.get("noise_floor_db"), speech_level_db=noise.get("speech_level_db"), fillers=find_fillers(words), hesitations=hes, asr_cost_usd=asr_cost)

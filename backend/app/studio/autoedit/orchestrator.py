@@ -337,12 +337,15 @@ class Runner:
         cuts = [o.params["start"] for o in auto.ops if o.type == "cut_segment"]
         return creative.moment_ops(cr, self.inp, cuts)
 
+    def _ref(self):
+        return (self.inp.lufs, self.inp.silence_db) if self.inp is not None else None
+
     def _baseline(self):
         """The 9:16 conversion without edits, as a proxy: the 'before' for the critic and the objective comparisons."""
         with self.stage("baseline"):
             e = EDL(ops=[], style=self.style())
             path, rr, key = self.render_set(e, set(), "base", proxy=True)
-            m = verify.measure(path)
+            m = verify.measure(path, ref=self._ref())
             self.state["baseline"] = {"metrics": m}
             self.event("info", "baseline ready")
             return path, m
@@ -360,7 +363,7 @@ class Runner:
         path, rr, key = self.render_set(edl, groups, tag, proxy=True)
         if rr is None:
             rr = _replay(edl, self.inp, groups, self.faces, self.work / f"replay_{tag}")
-        return {"path": path, "rr": rr, "m": verify.measure(path)}
+        return {"path": path, "rr": rr, "m": verify.measure(path, ref=self._ref())}
 
     def verify_bundles(self, edl: EDL, base: tuple[Path, dict], pool: ThreadPoolExecutor):
         st, inp = self.state, self.inp
@@ -555,7 +558,7 @@ class Runner:
             st["edl"] = edl.model_dump()
             final_path, _rr, _key = self.render_set(edl, kept, "final2")
         with self.stage("final_checks"):
-            final_m = verify.measure(final_path, light=True)
+            final_m = verify.measure(final_path, light=True, ref=self._ref())
         if (final_m["width"], final_m["height"]) != (config.OUT_W, config.OUT_H):
             raise RuntimeError(f"the final render is {final_m['width']}x{final_m['height']}, expected {config.OUT_W}x{config.OUT_H}")
         self.finalise(edl, final_path, final_m, base_m, overall, bool(kept))
@@ -591,7 +594,7 @@ class Runner:
         try:
             self._fetch_original()
             path, _, _ = self.render_set(edl, set(), "final")
-            m = verify.measure(path, light=True)
+            m = verify.measure(path, light=True, ref=self._ref())
             self.finalise(edl, path, m, (st.get("baseline") or {}).get("metrics"), None, False, partial=True)
         except Exception as e:
             log.warning("[AutoEdit] partial finalise failed: %s", e)
@@ -648,7 +651,7 @@ class Runner:
             path, rr, key = self.render_set(edl, enabled, "re")
             if rr is None:
                 rr = _replay(edl, self.inp, enabled, self.faces, self.work / "replay_re")
-            m = verify.measure(path)
+            m = verify.measure(path, ref=self._ref())
             self.phase("verify", "objective checks on the new render")
             asr = self._asr(path)
             checks = []

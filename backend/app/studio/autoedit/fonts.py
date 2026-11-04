@@ -224,7 +224,7 @@ def resolve(cache: FontCache, family: str, weight: int, text: str) -> Resolved:
             notes.append(f"{family} could not be used for {script} text ({str(e)[:80]}); Poppins is used instead.")
             return None
 
-    latin = fetch("latin") if "latin" in scripts else None
+    latin = fetch("latin")   # always: an English hook or label on a Hindi video should still be in the pack's own font
     dv = fetch("devanagari") if "devanagari" in scripts else None
     if latin is None:
         latin = fb

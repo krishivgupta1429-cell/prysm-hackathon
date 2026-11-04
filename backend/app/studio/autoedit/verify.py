@@ -29,7 +29,7 @@ FLAGS = ("text_over_face", "cut_mid_word", "caption_timing", "caption_readabilit
 
 # ------------------------------------------------------------------ a) objective measurements
 
-def measure(video: str | Path, light: bool = False) -> dict:
+def measure(video: str | Path, light: bool = False, ref: tuple[float | None, float] | None = None) -> dict:
     """Tool-measured facts about a video file. `light` skips the frame-level detectors (cuts, black, frozen): used for the delivered file."""
     info = ffx.probe(video)
     out = {"duration_s": round(info["duration"], 2), "width": info["width"], "height": info["height"], "fps": info["fps"],
@@ -47,7 +47,13 @@ def measure(video: str | Path, light: bool = False) -> dict:
     out["av_diff_s"] = round(abs(durs.get("video", 0) - durs.get("audio", durs.get("video", 0))), 3)
     if info["has_audio"]:
         out.update(ffx.loudness(video))
-        sil = ffx.silences(video)
+        # the silence level moves with the loudness (+11 dB of gain moves the threshold +11 dB), measured against the SOURCE's own level, so
+        # before and after classify the same material as silent
+        if ref and ref[0] is not None and out.get("lufs") is not None:
+            thr = max(-60.0, min(-20.0, ref[1] + (out["lufs"] - ref[0])))
+        else:
+            thr = -35.0
+        sil = ffx.silences(video, noise_db=thr)
         total = sum(((s["end"] if s["end"] is not None else info["duration"]) - s["start"]) for s in sil)
         out["silence_ratio"] = round(total / max(info["duration"], 1e-6), 3)
     if light:
@@ -343,6 +349,7 @@ version. The edit applies these bundles of changes:
 
 Watch AND listen to both. For each bundle decide whether it made the video better or at least not worse, and list every real DEFECT
 it introduced that a viewer would notice: {', '.join(FLAGS)}.
+- A caption that gets one or two words wrong (a mis-heard word) is a "minor" defect; captions that are missing for several seconds of clear speech, out of sync, unreadable or wrong in many places are "major".
 - Judge captions for READABILITY (size, contrast against the picture, line length, not too fast to read), text against the face and the Instagram UI zones, sound effects for MASKING the speech (an effect that makes a word hard to hear), for being TOO MANY (the edit feels busy), and for being the WRONG SOUND for the moment (a comic sound on a serious line).
 - Give each defect a severity: "major" (a viewer would notice and be annoyed: a cut inside a word, text on the face, captions out of sync,
   pumping or clicking audio, a zoom that crops the face, text that repeats what the creator already shows) or "minor" (barely noticeable).

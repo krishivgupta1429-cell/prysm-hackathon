@@ -70,6 +70,16 @@ def scene_cuts(path: str | Path, threshold: float = 0.3) -> list[float]:
     return [round(t, 3) for t in times if t > 0.15]
 
 
+def silence_threshold(lufs: float | None, p10_db: float | None = None) -> float:
+    """The level under which audio counts as silence (silencedetect compares PEAK amplitude, so room noise needs ~16 dB of crest margin above
+    its RMS level). A normal-loudness file (-20 LUFS or louder) keeps the usual -35 dB. A quiet recording is judged against its own noise:
+    the quietest 10 % of the audio (`p10_db`, RMS) + 16 dB, between -48 and -32 dB; a threshold fixed at -35 would call quiet speech silence
+    and one scaled only by loudness could sit under the room noise and find no pause at all."""
+    if lufs is None or lufs >= -20.0 or p10_db is None:
+        return -35.0
+    return round(min(max(p10_db + 16.0, -48.0), -32.0), 1)
+
+
 def silences(path: str | Path, noise_db: float = -35.0, min_len: float = 0.3) -> list[dict]:
     err = run_stderr(["-i", str(path), "-vn", "-af", f"silencedetect=noise={noise_db}dB:d={min_len}", "-f", "null", "-"])
     starts = [float(x) for x in re.findall(r"silence_start: (-?[0-9.]+)", err)]
