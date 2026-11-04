@@ -44,3 +44,16 @@ def pack_style(name: str) -> dict:
     p = PACKS.get(name) or PACKS[DEFAULT_PACK]
     return {"pack": name if name in PACKS else DEFAULT_PACK, "font_headline": p["headline"], "font_caption": p["caption"],
             "caption_weight": p["caption_weight"], "highlight_color": p["accent"], "accent": p["accent"], "animation": p["animation"]}
+
+
+def apply_suggestion(overrides: dict, pack: str) -> None:
+    """Put the SUGGESTED pack into the style overrides, with that pack's own two fonts, unless the creator chose that part themselves.
+    The model's separate font suggestions stay one-click suggestions: applying them over the pack made a "Clean" pack render with another
+    pack's fonts (so the video looked like Bold Hype while the screen said Clean). `user_set` lists what the creator picked."""
+    mine = set(overrides.get("user_set") or [])
+    p = pack_style(pack)
+    if "pack" not in mine:
+        overrides["pack"] = p["pack"]
+    for key in ("font_headline", "font_caption"):
+        if key not in mine:
+            overrides[key] = p[key]

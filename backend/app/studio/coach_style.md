@@ -32,3 +32,4 @@ CHECKLIST BEFORE YOU ANSWER
 2. Every quote is exact; every timestamp exists in the data you were given.
 3. Advisory parameters have ready-to-use wording in quotes.
 4. Closings differ between parameters; nothing is cut off mid-sentence; every field ends in a full stop.
+5. No statement about Prysm's own data: never write "based on 1,000 reels", "we analysed N videos" or any count of reels, creators or videos Prysm has seen. Suggested lines may only use numbers that come from this video itself.

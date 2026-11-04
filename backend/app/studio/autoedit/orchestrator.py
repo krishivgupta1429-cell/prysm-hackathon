@@ -323,10 +323,7 @@ class Runner:
         """Pack, fonts and emphasis from the director into the style overrides (never over a choice the creator already made), and its moments as ops."""
         st = self.state
         ov = st["style_overrides"]
-        p = packs.pack_style(cr.pack)
-        ov.setdefault("pack", cr.pack)
-        ov.setdefault("font_headline", cr.headline or p["font_headline"])
-        ov.setdefault("font_caption", cr.caption or p["font_caption"])
+        packs.apply_suggestion(ov, cr.pack)     # the suggested pack AND its own fonts; the model's font ideas stay one-click suggestions
         if "emphasis" not in ov:
             ov["emphasis"] = cr.emphasis_times
         st["style_choice"] = cr.to_json()

@@ -182,3 +182,15 @@ def test_empty_values_as_in_env_example_mean_not_set(monkeypatch):
         monkeypatch.setenv(name, "")
     s = Settings(_env_file=None)    # not the developer's own .env
     assert s.COACH_STYLE is True and s.STEP_REGENERATE is True and s.DEV_BAKEOFF is False and s.STUDIO_UNLIMITED is False
+
+
+# ---- no made-up figure about Prysm's own data (hackathon fix)
+
+def test_a_count_of_reels_presented_as_prysms_own_data_is_a_problem():
+    from app.studio import step_quality as q
+    for bad in ["Say: 'Based on 1,000 reels we analysed, hooks under 2 seconds win.'", "Prysm data from 1000 videos shows this works.", "Our analysis of 2k creators says so."]:
+        assert q.claims_own_data(bad), bad
+    for ok in ["Cut the first 3 videos clips you filmed down to one.", "Trim the intro to 2 seconds.", "Post 3 reels this week and compare the saves."]:
+        assert not q.claims_own_data(ok), ok
+    p = {"name": "Hook & Opening", "howToDoIt": "Step 1 — Say 'Based on 1,000 reels we analysed, this hook works.' Step 2 — Trim the pause at 0:02. Step 3 — Watch the first 3 seconds."}
+    assert any("own data" in w for w in q.problems(p))

@@ -271,3 +271,29 @@ def test_sound_effects_render_ducked_under_the_voice_and_the_global_switch_turns
     assert off.sfx_hits == [] and off.ops_applied == []
     a, b = verify.measure(on.path, light=True), verify.measure(off.path, light=True)
     assert a["lufs"] >= b["lufs"] and abs(a["duration_s"] - b["duration_s"]) < 0.05
+
+
+# ---- the suggested pack is the pack that renders (hackathon fix)
+
+def test_the_suggested_pack_renders_with_its_own_fonts_not_the_models_font_ideas():
+    from app.studio.autoedit import packs
+    ov = {}
+    packs.apply_suggestion(ov, "clean")            # the model also suggested Anton + Montserrat (Bold Hype's fonts): they stay suggestions
+    st = resolve_style("clean", ov)
+    assert st["pack"] == "clean" and (st["font_headline"], st["font_caption"]) == ("Poppins", "Poppins")
+
+
+def test_a_creators_own_pick_beats_the_suggestion():
+    from app.studio.autoedit import packs
+    ov = {"pack": "fitness", "font_headline": "Bebas Neue", "font_caption": "Oswald", "user_set": ["pack", "font_headline", "font_caption"]}
+    packs.apply_suggestion(ov, "clean")
+    assert (ov["pack"], ov["font_headline"], ov["font_caption"]) == ("fitness", "Bebas Neue", "Oswald")
+    ov2 = {"font_caption": "Nunito", "user_set": ["font_caption"]}   # only the caption font was picked: the pack and headline follow the suggestion
+    packs.apply_suggestion(ov2, "editorial")
+    assert (ov2["pack"], ov2["font_headline"], ov2["font_caption"]) == ("editorial", "Playfair Display", "Nunito")
+
+
+def test_a_preset_change_through_a_request_keeps_the_pack():
+    from app.studio.autoedit import revise
+    src = open(revise.__file__).read()
+    assert '"user_set", "pack"' in src

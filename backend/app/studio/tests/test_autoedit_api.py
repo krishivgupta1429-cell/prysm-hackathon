@@ -172,7 +172,7 @@ def test_the_style_endpoint_changes_pack_fonts_intensity_and_sfx_then_rerenders(
     r = ctx.client.post(base, json={"pack": "fitness", "intensity": "punchy", "sfx": False})
     assert r.status_code == 200 and len(ctx.spawned) == 1
     body = r.json()
-    assert body["style"] == {"pack": "fitness", "font_headline": "Bebas Neue", "font_caption": "Oswald", "animation": "slide", "intensity": "punchy", "sfx": False}
+    assert body["style"] == {"pack": "fitness", "font_headline": "Bebas Neue", "font_caption": "Oswald", "animation": "slide", "intensity": "punchy", "sfx": False, "pack_source": "your choice"}
     assert "fitness" in body["packs"] and body["intensities"] == ["subtle", "balanced", "punchy"]
     ctx.redis.kv.clear()
     api._LIVE.clear()

@@ -126,7 +126,8 @@ def apply_diff(edl: EDL, diff: Diff, inp: Inputs, style_overrides: dict) -> Appl
         overrides[k] = v
     preset = diff.preset
     if preset:
-        overrides = {}  # a new preset starts from its own values
+        # a new preset starts from its own numbers, but the pack, fonts and switches the creator or the director chose stay (as in /preset)
+        overrides = {k: v for k, v in overrides.items() if k in ("user_set", "pack", "font_headline", "font_caption", "animation", "intensity", "sfx", "emphasis", "caption_weight", "accent")}
     for op in new.ops:
         if op.id in diff.disable_ids or op.type in diff.disable_types:
             op.enabled = False

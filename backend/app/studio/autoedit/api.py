@@ -135,7 +135,8 @@ def public_state(st: dict) -> dict:
     out["intensities"] = list(_packs.INTENSITIES)
     ov = out.get("style_overrides") or {}
     out["style"] = {"pack": ov.get("pack"), "font_headline": ov.get("font_headline"), "font_caption": ov.get("font_caption"), "animation": ov.get("animation"),
-                    "intensity": ov.get("intensity", "balanced"), "sfx": ov.get("sfx", True)}
+                    "intensity": ov.get("intensity", "balanced"), "sfx": ov.get("sfx", True),
+                    "pack_source": "your choice" if "pack" in (ov.get("user_set") or []) else "suggested"}
     out["revisions_left"] = max(0, config.MAX_REVISIONS - len(out.get("revisions") or []))
     out["trace"] = (out.get("trace") or [])[-80:]
     return out
@@ -237,7 +238,7 @@ class StyleBody(BaseModel):
     sfx: bool | None = None
 
 
-KEEP_ON_PRESET = ("pack", "font_headline", "font_caption", "animation", "intensity", "sfx", "emphasis", "caption_weight", "accent")
+KEEP_ON_PRESET = ("user_set", "pack", "font_headline", "font_caption", "animation", "intensity", "sfx", "emphasis", "caption_weight", "accent")
 
 
 class SwapBody(BaseModel):
@@ -384,12 +385,14 @@ async def set_style(analysis_id: str, body: StyleBody, current_user: User = Depe
         p = packs.pack_style(body.pack)
         ov.update({"pack": body.pack, "font_headline": p["font_headline"], "font_caption": p["font_caption"], "animation": p["animation"],
                    "caption_weight": p["caption_weight"], "accent": p["accent"]})
+        ov["user_set"] = sorted(set(ov.get("user_set") or []) | {"pack", "font_headline", "font_caption"})
     for key in ("font_headline", "font_caption"):
         v = getattr(body, key)
         if v is not None:
             if v not in fams:
                 raise HTTPException(status_code=400, detail=f"{v!r} is not a Google Fonts family.")
             ov[key] = v
+            ov["user_set"] = sorted(set(ov.get("user_set") or []) | {key})
     if body.animation is not None:
         if body.animation not in packs.ANIMATIONS:
             raise HTTPException(status_code=400, detail="Unknown caption animation.")

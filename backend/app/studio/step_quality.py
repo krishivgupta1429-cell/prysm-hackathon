@@ -18,6 +18,18 @@ from app.studio.json_tolerant import extract_json_object
 MIN_STEPS = 3
 _READY = re.compile(r"[‘'“\"][^'’\"”]{4,200}[’'”\"]")
 NEEDS_READY = {"Shareability"} | set(ADVISORY_PARAMETERS)
+# A made-up figure about Prysm's own data ("from 1,000 reels we analysed ..."). Prysm has no such dataset to quote in a creator's line.
+_COUNT = re.compile(r"\b\d[\d,.]*\s*(?:k|m|thousand|million)?\+?\s+(?:reels?|videos?|creators?|posts?|accounts?)\b", re.I)
+_OWN_DATA_CUE = re.compile(r"\b(?:prysm|we|our|analy[sz]\w*|data|dataset|stud(?:y|ies)|benchmark\w*|research|sample|scanned|reviewed)\b", re.I)
+
+
+def claims_own_data(text: str) -> bool:
+    """True when `text` states a count of reels / videos / creators next to a cue that it is Prysm's own data or analysis."""
+    for m in _COUNT.finditer(text or ""):
+        around = (text or "")[max(0, m.start() - 70):m.end() + 70]
+        if _OWN_DATA_CUE.search(around):
+            return True
+    return False
 
 
 def problems(param: dict) -> list:
@@ -32,6 +44,8 @@ def problems(param: dict) -> list:
         out.append("no quoted ready-to-say line in the steps")
     if items and quality.looks_truncated(items[-1]):
         out.append("the last step is cut off")
+    if any(claims_own_data(i) for i in items):
+        out.append("a step quotes a figure about Prysm's own data (for example a number of reels analysed); no such figure may be stated")
     if any(steps.has_unclosed_quote(i) for i in items):
         out.append("a quoted phrase is opened and never closed (cut off or split across steps)")
     return out
@@ -67,6 +81,7 @@ WHAT IS WRONG WITH THE CURRENT STEPS: {'; '.join(why)}.
 REQUIREMENTS
 - Write 3 to 5 steps, formatted exactly "Step 1 — ... Step 2 — ... Step 3 — ..." (an em dash after the number, one action per step, every step a complete sentence that ends with a full stop).
 - Step 1 is the MAIN action. If it involves something to say or put on screen, step 1 contains the exact ready-to-say line in single quotes. Any fallback ("Fallback: ...") comes AFTER the main steps, never first.
+- Never state a figure about Prysm's own data or analysis (no "based on 1,000 reels", no counts of reels, creators or videos Prysm has seen). Numbers may only come from this video's own data.
 - Never split a quoted phrase across steps, and never use "Step" inside a step.
 - Keep the same advice direction as the fields above; anchor every step in a timestamp or an exact quote from this video.
 
