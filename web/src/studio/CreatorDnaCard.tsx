@@ -17,6 +17,8 @@ export type CreatorDnaBlock = {
   }[]
   topReels: number[]
   bottomReels: number[]
+  partialReels?: number[]   // read from thumbnail and caption only: not used for hook, format or pacing
+  grounding?: { checked: number; dropped: number; rewritten: number; regenerated: boolean } | null
 }
 
 const tag: CSSProperties = { fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', padding: '2px 8px', border: '1px solid #d4d4d4', borderRadius: 999, color: '#737373', whiteSpace: 'nowrap', display: 'inline-block' }
@@ -39,6 +41,11 @@ export function CreatorDnaCard({ block }: { block: CreatorDnaBlock }) {
         This video's fingerprint against your {block.topReels.length} strongest and {block.bottomReels.length} weakest reels (by your own Instagram numbers).
         A pattern in a small sample, not proof.{block.isFixture ? ' TEST DATA from the development fixture.' : ''}
       </p>
+      {!!block.partialReels?.length && (
+        <p style={{ fontSize: 12, color: '#0a0a0a', margin: '-8px 0 12px', lineHeight: 1.4 }} data-testid="partial-line">
+          {block.partialReels.map(n => `Reel ${n}`).join(', ')} {block.partialReels.length === 1 ? 'was' : 'were'} read from the thumbnail and caption only (no video file from Instagram), so {block.partialReels.length === 1 ? 'it is' : 'they are'} not counted for hook, format, pacing or watch-through.
+        </p>
+      )}
       {block.comparison.length === 0 ? (
         <p style={{ fontSize: 14, color: '#404040' }}>Not enough fingerprint data to compare this video.</p>
       ) : block.comparison.map(c => (

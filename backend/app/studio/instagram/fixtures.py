@@ -6,7 +6,7 @@ personalised analysis, UI) can be tested without a real account. Everything is d
 captions start with "[FIXTURE]", the account is flagged is_fixture, and the UI shows a banner.
 
 Built-in test conditions: reel 1 is under 48 h old (no insights yet), reel 4 has no watch-time metrics, reel 9 is a viral
-outlier (about 9x the typical reach), reel 12 has no media_url (licensed-audio case: thumbnail only).
+outlier (about 9x the typical reach), reels 6 and 12 have no media_url (licensed-audio case: thumbnail and caption only, no watch-through).
 """
 import random
 import subprocess
@@ -140,7 +140,7 @@ class FixtureSource:
             posted = now - timedelta(hours=20) if i == 0 else now - timedelta(days=3 + 5 * i)
             out.append({
                 "id": f"fixture_{i + 1:03d}", "caption": cap, "media_type": "VIDEO", "media_product_type": "REELS",
-                "media_url": None if i == 11 else f"fixture://{i}", "thumbnail_url": f"fixture://thumb/{i}",
+                "media_url": None if i in (5, 11) else f"fixture://{i}", "thumbnail_url": f"fixture://thumb/{i}",
                 "permalink": f"https://www.instagram.com/reel/FIXTURE{i + 1:03d}/", "timestamp": posted.isoformat(),
                 "like_count": (_insights(i)["likes"] or 0) if i else 0, "comments_count": (_insights(i)["comments"] or 0) if i else 0,
                 "_fixture_index": i,

@@ -16,7 +16,7 @@ type Status = {
   account: null | {
     username: string | null; isFixture: boolean; tokenExpiresAt: string | null; lastImportAt: string | null
     lastImportRequested: number | null
-    lastImport: null | { imported: number; found: number; requested: number; missing_metrics: string[]; rate_limited: boolean; token_invalid: boolean }
+    lastImport: null | { imported: number; found: number; requested: number; missing_metrics: string[]; rate_limited: boolean; token_invalid: boolean; partial?: number }
   }
 }
 type Claim = { claim: string; reels: number[] }
@@ -25,18 +25,19 @@ type Reel = {
   n: number; id: string; permalink: string | null; postedAt: string | null; caption: string | null; duration_s: number | null
   performance_index: number | null; performance_basis: string | null; watch_through: number | null; fingerprint: Fingerprint | null
   frames_used: number; note: string | null
+  analysis_level?: 'full' | 'thumbnail_caption' | 'caption_only'; partial?: boolean; partial_reason?: string | null
 }
 type DnaResp = {
   connected: boolean; isFixture?: boolean; username?: string
   dna: null | {
     summary: string; sampleSize: number; costUsd: number; model: string
-    data: { mode: string; reason?: string; strongest: Claim[]; weakest: Claim[]; keep: Claim[]; change: Claim[]; shared?: Claim[]; outlier?: boolean }
+    data: { mode: string; reason?: string; strongest: Claim[]; weakest: Claim[]; keep: Claim[]; change: Claim[]; shared?: Claim[]; outlier?: boolean; grounding?: { checked: number; dropped: number; regenerated: boolean } }
     metricsAvailable: Record<string, number>
   }
   reels: Reel[]; metricLabels: Record<string, string>
 }
 type Job = { status: 'running' | 'done' | 'error'; found?: number; requested: number; imported?: number; error?: string; progress: Record<string, string>
-  missing_metrics?: string[]; rate_limited?: boolean; cost_usd?: number }
+  missing_metrics?: string[]; rate_limited?: boolean; cost_usd?: number; partial?: number }
 
 const page: CSSProperties = { minHeight: '100vh', background: '#fff', color: '#0a0a0a', fontFamily: 'system-ui, -apple-system, sans-serif' }
 const wrap: CSSProperties = { maxWidth: 780, margin: '0 auto', padding: '24px 16px 64px' }
@@ -52,6 +53,7 @@ const pct = (v: number | null | undefined) => (v == null ? 'not available' : `${
 const idx = (v: number | null | undefined) => (v == null ? 'not available' : v.toFixed(2))
 const date = (s: string | null) => (s ? new Date(s).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '')
 const words = (s: string) => s.replace(/_/g, ' ')
+const known = (s: string | null | undefined) => !!s && s !== 'unknown'   // hook / pacing are "unknown" for reels read without their video
 
 function FixtureBanner() {
   return (
@@ -189,6 +191,7 @@ export default function CreatorDna() {
   const running = stages.find(([, v]) => v === 'running')?.[0]
   const label = running === 'fetch_reels' ? 'Finding your reels…' : running === 'creator_dna' ? 'Writing your Creator DNA…'
     : running?.startsWith('reel_') ? `Reading reel ${parseInt(running.slice(5), 10)} of ${job?.found ?? job?.requested}…` : 'Working…'
+  const partialReels = (dna?.reels || []).filter(r => r.partial)
   const lastMissing = (dna?.dna ? status.account?.lastImport?.missing_metrics : []) || []
 
   return (
@@ -238,6 +241,7 @@ export default function CreatorDna() {
                 <p style={{ ...p, marginTop: 14 }} data-testid="import-result">
                   Imported {job.imported} of {job.requested} requested reels.
                   {(job.found ?? 0) < job.requested && ' Your account has fewer reels than requested.'}
+                  {!!job.partial && ` ${job.partial} of them had no video file from Instagram (often licensed audio), so ${job.partial === 1 ? 'it was' : 'they were'} read from the thumbnail and caption only and ${job.partial === 1 ? 'is' : 'are'} not fully analysed.`}
                   {job.rate_limited && ' Instagram\'s rate limit was reached, so some reels have no insights.'}
                 </p>
               )}
@@ -256,6 +260,19 @@ export default function CreatorDna() {
                 <ClaimList title="Keep" items={dna.dna.data.keep} />
                 <ClaimList title="Change" items={dna.dna.data.change} />
                 <ClaimList title="Seen in these reels" items={dna.dna.data.shared || []} />
+                {partialReels.length > 0 && (
+                  <div style={{ border: '1px dashed #0a0a0a', borderRadius: 12, padding: '10px 12px', margin: '12px 0' }} data-testid="partial-notice">
+                    <p style={{ ...p, margin: 0, fontWeight: 700 }}>Not fully analysed: {partialReels.map(r => `Reel ${r.n}`).join(', ')}</p>
+                    <p style={{ ...small, marginTop: 4 }}>
+                      Instagram gave no video file for {partialReels.length === 1 ? 'this reel' : 'these reels'} (often licensed audio), so {partialReels.length === 1 ? 'it was' : 'they were'} read
+                      from the thumbnail and caption only. {partialReels.length === 1 ? 'It has' : 'They have'} no watch-through, and {partialReels.length === 1 ? 'its' : 'their'} hook,
+                      format and pacing were not judged. The patterns above rest on the other {dna.reels.length - partialReels.length} reels for those.
+                    </p>
+                  </div>
+                )}
+                {!!dna.dna.data.grounding?.dropped && (
+                  <p style={small} data-testid="grounding-note">{dna.dna.data.grounding.dropped} point{dna.dna.data.grounding.dropped === 1 ? '' : 's'} the checker could not back with your reels {dna.dna.data.grounding.dropped === 1 ? 'was' : 'were'} left out. Every point shown names the reels it comes from.</p>
+                )}
                 {lastMissing.length > 0 && (
                   <p style={small} data-testid="missing">Instagram returned nothing for: {lastMissing.map(m => dna.metricLabels[m] || m).join(', ')}. The patterns use the metrics that were available.</p>
                 )}
@@ -266,6 +283,7 @@ export default function CreatorDna() {
             {dna && dna.reels.length > 0 && (
               <div style={card} data-testid="reels">
                 <h2 style={h2}>Imported reels</h2>
+                {partialReels.length > 0 && <p style={{ ...small, fontWeight: 700, color: '#0a0a0a' }} data-testid="analysed-count">{dna.reels.length - partialReels.length} of {dna.reels.length} reels fully analysed from video; {partialReels.length} from thumbnail and caption only.</p>}
                 <p style={small}>Index: reach (or views if reach is missing) compared with your own median, so 1.00 is a typical reel of yours. Watch-through: average watch time divided by the reel's length.</p>
                 <div style={{ marginTop: 8 }}>
                   {dna.reels.map(r => (
@@ -275,16 +293,17 @@ export default function CreatorDna() {
                         <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                           {fixture && <span style={{ ...chip, background: '#0a0a0a', color: '#fff', borderColor: '#0a0a0a' }}>FIXTURE</span>}
                           <span style={chip}>index {idx(r.performance_index)}{r.performance_basis && r.performance_index != null ? ` (${r.performance_basis})` : ''}</span>
-                          <span style={chip}>watch-through {pct(r.watch_through)}</span>
+                          {r.partial && <span style={{ ...chip, border: '1px dashed #0a0a0a', color: '#0a0a0a', fontWeight: 700 }} data-testid="partial-badge">{r.analysis_level === 'caption_only' ? 'CAPTION ONLY' : 'THUMBNAIL + CAPTION ONLY'} · NOT FULLY ANALYSED</span>}
+                          <span style={chip}>{r.partial ? 'watch-through: none (no video)' : `watch-through ${pct(r.watch_through)}`}</span>
                         </span>
                       </div>
                       <p style={{ ...p, margin: '4px 0' }}>{(r.caption || '').slice(0, 140) || 'No caption'}</p>
                       {r.fingerprint && (
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '4px 0' }}>
-                          {[words(r.fingerprint.hook_type), words(r.fingerprint.format), `${r.fingerprint.pacing} pace`, r.fingerprint.on_screen_text ? 'on-screen text' : 'no on-screen text', r.fingerprint.topic].filter(Boolean).map((t, i) => <span key={i} style={chip}>{t}</span>)}
+                          {([known(r.fingerprint.hook_type) && words(r.fingerprint.hook_type), known(r.fingerprint.format) && words(r.fingerprint.format), known(r.fingerprint.pacing) && `${r.fingerprint.pacing} pace`, r.fingerprint.on_screen_text ? 'on-screen text' : 'no on-screen text', r.fingerprint.topic].filter(Boolean) as string[]).map((t, i) => <span key={i} style={chip}>{t}</span>)}
                         </div>
                       )}
-                      {r.note && <p style={small}>{r.note}</p>}
+                      {r.partial && r.partial_reason ? <p style={{ ...small, color: '#0a0a0a' }} data-testid="partial-reason">{r.partial_reason}</p> : r.note && <p style={small}>{r.note}</p>}
                       {r.permalink && !fixture && <a href={r.permalink} target="_blank" rel="noreferrer" style={{ ...small, color: '#0a0a0a' }}>Open on Instagram</a>}
                     </div>
                   ))}

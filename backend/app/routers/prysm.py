@@ -238,8 +238,14 @@ async def _run_analysis_task(
                 from app.studio import safety as _sf
                 from app.core.cache import redis_client as _rc
                 _sp = _dna.Spend(_dna.cost_cap_usd())
+                _gr_stats = None
                 async with AsyncSessionLocal() as _dna_db:
-                    _blk = await _pz.comparison_block(_dna_db, _uuid.UUID(str(user_id)), result, _sp)
+                    try:   # every sentence about the creator's own reels must be grounded in their imported reels (else rewritten once or dropped)
+                        _gr_stats = await _pz.ground_result(await _pz.load(_dna_db, _uuid.UUID(str(user_id))), result, _sp)
+                    except Exception as _gr_err:
+                        _log.warning(f"[Prysm] Creator DNA grounding failed for job {job_id}: {type(_gr_err).__name__}; removing reel comparisons")
+                        _pz.strip_personal(result)
+                    _blk = await _pz.comparison_block(_dna_db, _uuid.UUID(str(user_id)), result, _sp, grounding=_gr_stats)
                 if _blk:
                     result["creatorDna"] = _blk
                     if _sp.usd and isinstance(result.get("_cost"), dict):
@@ -248,6 +254,11 @@ async def _run_analysis_task(
                     await _sf.record_spend(_rc, _sp.usd)
             except Exception as _blk_err:
                 _log.warning(f"[Prysm] Creator DNA comparison skipped for job {job_id}: {type(_blk_err).__name__}")
+                try:
+                    from app.studio.instagram import personalise as _pz2
+                    _pz2.strip_personal(result)   # fail closed: no unchecked sentence about the creator's reels goes out
+                except Exception:
+                    pass
         if progress is not None:
             await progress.flush()
             try:

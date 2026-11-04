@@ -77,7 +77,7 @@ function QualityPanel({ q }: { q: QAlign }) {
 
 export type Measured = {
   connected: boolean; isFixture?: boolean; reels?: number; username?: string
-  avgWatchThrough?: number | null; watchThroughReels?: number; avgSkipRate?: number | null; medianReach?: number | null
+  avgWatchThrough?: number | null; watchThroughReels?: number; partialReels?: number; avgSkipRate?: number | null; medianReach?: number | null
 }
 
 function Stat({ label, value, note }: { label: string; value: string; note: string }) {
@@ -114,7 +114,7 @@ export default function ViewerBehaviourCard({ ep }: { ep?: Engagement | null }) 
         {m ? (
           <div data-testid="measured">
             <p style={sub}>Measured from your account: averages over your last {m.reels} imported reels, not a prediction for this video.{m.isFixture ? ' TEST DATA from the development fixture.' : ''}</p>
-            <Stat label="Average watch-through" value={none(m.avgWatchThrough, v => `${Math.round(v * 100)}%`)} note={m.watchThroughReels ? `of the reel's length, over ${m.watchThroughReels} reels with watch time` : 'Instagram gave no watch time for these reels'} />
+            <Stat label="Average watch-through" value={none(m.avgWatchThrough, v => `${Math.round(v * 100)}%`)} note={m.watchThroughReels ? `of the reel's length, over ${m.watchThroughReels} reels with watch time${m.partialReels ? `; ${m.partialReels} reel${m.partialReels === 1 ? ' has' : 's have'} no video file from Instagram and no watch-through` : ''}` : 'Instagram gave no watch time for these reels'} />
             <Stat label="Average skip rate" value={none(m.avgSkipRate, v => `${Math.round(v * 100)}%`)} note="share of views that skipped early (Instagram's estimate)" />
             <Stat label="Typical reach" value={none(m.medianReach, v => Math.round(v).toLocaleString())} note="median accounts reached per reel" />
           </div>

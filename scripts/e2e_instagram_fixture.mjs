@@ -66,6 +66,18 @@ const reelsText = await page.textContent('[data-testid=reels]')
 check('reels show index and watch-through', /index \d\.\d\d/.test(reelsText) && /watch-through \d+%/.test(reelsText))
 check('missing numbers say not available (no invented values)', /not available/.test(reelsText))
 check('every reel marked FIXTURE', (reelsText.match(/FIXTURE/g) || []).length >= 8)
+// reels without a video link (licensed audio): said plainly, never shown as fully analysed
+check('import result mentions the reel without a video file', /had no video file from Instagram/.test(resText) && /not fully analysed/.test(resText), resText.trim().slice(0, 200))
+check('exactly one reel carries the thumbnail-only badge', (await page.$$('[data-testid=partial-badge]')).length === 1)
+const partialRow = await page.$('[data-testid=reel-row]:has([data-testid=partial-badge])')
+const partialText = partialRow ? await partialRow.textContent() : ''
+check('that reel says thumbnail + caption only, no watch-through, not fully analysed', /THUMBNAIL \+ CAPTION ONLY/.test(partialText) && /NOT FULLY ANALYSED/.test(partialText) && /watch-through: none/.test(partialText) && !/watch-through \d+%/.test(partialText), partialText.replace(/\s+/g, ' ').slice(0, 160))
+check('that reel shows no hook / format / pacing chips', !/(question|bold claim|list promise|visual only|talking head|montage|fast pace|slow pace|medium pace)/i.test(partialText))
+check('that reel explains why (no video file, often licensed audio)', /no video file/.test(await page.textContent('[data-testid=partial-reason]')))
+const pn = (await page.textContent('[data-testid=partial-notice]')).replace(/\s+/g, ' ')
+check('DNA card: "Not fully analysed" notice names the reel', /Not fully analysed: Reel \d+/.test(pn) && /no watch-through/.test(pn) && /hook, format and pacing were not judged/.test(pn), pn.slice(0, 160))
+check('reels list counts fully analysed vs thumbnail-only', /7 of 8 reels fully analysed from video; 1 from thumbnail and caption only/.test(await page.textContent('[data-testid=analysed-count]')))
+check('DNA summary header says how many were read without video', /1 only from the thumbnail and caption/.test(await page.textContent('[data-testid=dna]')))
 await page.screenshot({ path: `${OUT}/04-imported.png`, fullPage: true })
 
 // 4. mobile layout
@@ -91,6 +103,8 @@ check('comparison card shown', await page.isVisible('[data-testid=creator-dna-ca
 const card = await page.textContent('[data-testid=creator-dna-card]')
 check('comparison card: title with N', new RegExp('How this compares to your last ' + result.creatorDna.sampleSize + ' reels').test(card))
 check('comparison card: cites reels', /Reels? \d/.test(card))
+if (result.creatorDna.partialReels && result.creatorDna.partialReels.length) check('comparison card: says which reels were read without video', /read from the thumbnail and caption only/.test(await page.textContent('[data-testid=partial-line]')))
+check('results: grounding stats saved with the analysis', !!result.creatorDna.grounding && typeof result.creatorDna.grounding.checked === 'number', JSON.stringify(result.creatorDna.grounding))
 await page.screenshot({ path: `${OUT}/06-results-personalised.png`, fullPage: false })
 const el = await page.$('[data-testid=viewer-behaviour]'); await el.scrollIntoViewIfNeeded()
 await page.screenshot({ path: `${OUT}/07-results-viewer-behaviour.png` })

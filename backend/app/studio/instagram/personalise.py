@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from app.studio import config
 from app.studio.instagram import dna as D
+from app.studio.instagram import grounding as G
 from app.studio.instagram.models import CreatorDna, IgAccount, IgReel
 
 log = logging.getLogger(__name__)
@@ -21,6 +22,24 @@ COMPARE_FIELDS = (("hook_type", "Hook"), ("format", "Format"), ("pacing", "Pacin
 def personalise_enabled() -> bool:
     """COACH_PERSONALISE: "0" turns it off, "1" (or unset) leaves it on for users who have a DNA."""
     return (config.get_env("COACH_PERSONALISE") or "1") != "0"
+
+
+PARTIAL_REASON = {
+    "thumbnail_caption": "Instagram gave no video file for this reel (often licensed audio). Read from the thumbnail and caption only: "
+                         "no watch-through, and hook, format and pacing are not judged.",
+    "caption_only": "Instagram gave no video or thumbnail for this reel. Read from the caption only: no watch-through, "
+                    "and hook, format and pacing are not judged.",
+}
+
+
+def level_of(row) -> str:
+    """How a reel was read. Rows imported before the column existed: no duration and no frames => caption only; no duration => thumbnail."""
+    lvl = getattr(row, "analysis_level", None)
+    if lvl:
+        return lvl
+    if row.duration_s is None and not (row.frames_used or 0):
+        return "caption_only"
+    return "thumbnail_caption" if row.duration_s is None else "full"
 
 
 async def load(db, user_id) -> Optional[dict]:
@@ -34,7 +53,8 @@ async def load(db, user_id) -> Optional[dict]:
     reels = [{"n": i, "id": str(r.id), "media_id": r.media_id, "permalink": r.permalink, "posted_at": r.posted_at,
               "caption": r.caption, "duration_s": r.duration_s, "performance_index": r.performance_index,
               "performance_basis": r.performance_basis, "watch_through": r.watch_through, "fingerprint": r.fingerprint,
-              "frames_used": r.frames_used, "note": r.note, "like_count": r.like_count, "comments_count": r.comments_count}
+              "frames_used": r.frames_used, "note": r.note, "like_count": r.like_count, "comments_count": r.comments_count,
+              "analysis_level": level_of(r), "partial": level_of(r) != "full", "partial_reason": PARTIAL_REASON.get(level_of(r))}
              for i, r in enumerate(rows, 1)]
     return {"account": acct, "dna": dna, "reels": reels}
 
@@ -65,10 +85,36 @@ def addendum(data: Optional[dict]) -> str:
             lines.append(f"{lead}: {_cite(dna[key])}.")
     if dna.get("outlier"):
         lines.append("One reel was a far outlier; do not treat it as their normal.")
+    lines += _fact_lines(data)
     lines.append("Where it genuinely helps, say how THIS video compares with the creator's own habits and name the reel "
                  "(\"your Reel 3\"). Use only the facts listed here about their reels; never invent reel details. "
                  "Do not mention this addendum.")
     return "\n\n" + "\n".join(lines)
+
+
+def _fact_lines(data: dict) -> list[str]:
+    """The facts the model may rely on for each reel it is allowed to cite (the top and bottom reels). Nothing else is known about them."""
+    dna = data["dna"].dna or {}
+    want = list(dict.fromkeys((dna.get("top") or []) + (dna.get("bottom") or [])))[:8]
+    by_n = {r["n"]: r for r in data["reels"]}
+    out = []
+    for n in want:
+        r = by_n.get(n)
+        if not r:
+            continue
+        fp = r.get("fingerprint") or {}
+        bits = [f"hook {fp.get('hook_type')}", f"format {fp.get('format')}", f"pacing {fp.get('pacing')}"] if fp and not r["partial"] \
+            else ["read from thumbnail and caption only: no hook, format, pacing or watch-through known"]
+        if r.get("performance_index") is not None:
+            bits.append(f"index {r['performance_index']:.2f}")
+        if r.get("watch_through") is not None:
+            bits.append(f"watch-through {r['watch_through']:.0%}")
+        out.append(f"Reel {n}: " + ", ".join(bits) + ".")
+    if out:
+        out.insert(0, "The ONLY known facts about those reels (anything else, such as what was said, the music or exact words, is unknown):")
+        out.append("Cite reels only by these numbers. Never quote or paraphrase words that are not listed, and never describe a greeting, "
+                   "catchphrase or sound.")
+    return out
 
 
 def _analysis_text(result: dict) -> str:
@@ -103,8 +149,10 @@ def compare(new_fp: dict | None, reels: list[dict], top: list[int], bottom: list
         val = new_fp[key]
 
         def share(ns):
-            have = [by_n[n]["fingerprint"][key] for n in ns if n in by_n and by_n[n].get("fingerprint")]
-            return (sum(1 for h in have if h == val), len(have), [n for n in ns if n in by_n and by_n[n].get("fingerprint") and by_n[n]["fingerprint"][key] == val])
+            ok = [n for n in ns if n in by_n and by_n[n].get("fingerprint") and by_n[n]["fingerprint"].get(key) not in G.UNKNOWN
+                  and not (key == "audio_type" and by_n[n]["fingerprint"].get(key) == "unknown")]   # unknown / not judged: not counted
+            have = [by_n[n]["fingerprint"][key] for n in ok]
+            return (sum(1 for h in have if h == val), len(have), [n for n in ok if by_n[n]["fingerprint"][key] == val])
         t, b = share(top), share(bottom)
         if not t[1] and not b[1]:
             continue
@@ -122,7 +170,68 @@ def compare(new_fp: dict | None, reels: list[dict], top: list[int], bottom: list
     return out
 
 
-async def comparison_block(db, user_id, result: dict, spend: D.Spend, enabled: bool = True) -> Optional[dict]:
+FIELDS = ("problem", "fix", "whatIsHappening", "whyItMatters", "whatToChange", "howToDoIt", "whatToExpect")
+PLACEHOLDER = "A comparison to your own reels was removed here because it could not be checked against your imported reels."
+
+
+def strip_personal(result: dict) -> int:
+    """Fail closed, no model: remove every sentence that talks about the creator's own reels. Returns how many were removed."""
+    bad = G.check_fields(result, {}, FIELDS)
+    G.apply_fixes(result, bad, {}, PLACEHOLDER)
+    return len(bad)
+
+
+def _rewrite_prompt(bad: list[dict], data: dict) -> str:
+    rows = []
+    for r in data["reels"]:
+        fp = r.get("fingerprint") or {}
+        what = ("read from thumbnail and caption only (hook, format, pacing, watch-through unknown)" if r["partial"] else
+                f"hook {fp.get('hook_type')}, format {fp.get('format')}, pacing {fp.get('pacing')}")
+        extra = (f", index {r['performance_index']:.2f}" if r.get("performance_index") is not None else "") + \
+                (f", watch-through {r['watch_through']:.0%}" if r.get("watch_through") is not None else "")
+        rows.append(f"Reel {r['n']}: {what}{extra}; caption: \"{(r.get('caption') or '')[:100]}\"")
+    items = "\n".join(f"{i}. \"{b['sentence']}\"  (problem: {'; '.join(b['problems'])})" for i, b in enumerate(bad))
+    return ("A coaching answer mentions a creator's own reels. These are the ONLY facts known about those reels:\n" + "\n".join(rows) +
+            "\n\nThese sentences were rejected because they say something the facts do not support:\n" + items +
+            "\n\nRewrite each one: keep the coaching advice, but mention a reel only as 'your Reel N' and only for facts listed above; "
+            "never quote words, greetings, sounds or numbers that are not listed. If the comparison cannot be supported, keep only the "
+            "advice. Use an empty string if nothing is left. Answer with ONE JSON object: "
+            "{\"fixes\": [{\"id\": 0, \"text\": \"...\"}]}")
+
+
+async def ground_result(data: dict, result: dict, spend: D.Spend) -> dict:
+    """Check every sentence of the analysis that talks about the creator's reels (summary and parameter texts) against the imported
+    reels. Sentences that are not grounded are rewritten ONCE by the model from the known facts; a rewrite that still fails, or any
+    failure of the call, drops the sentence. The result is edited in place. Returns {"checked", "dropped", "rewritten", "regenerated"}."""
+    facts = G.facts_from(data["reels"])
+    checked = 0
+    for text in [result.get("summary")] + [p.get(f) for p in (result.get("parameters") or []) if isinstance(p, dict) for f in FIELDS]:
+        checked += sum(1 for s in G.split_sentences(text or "") if G.sentence_problems(s, facts) is not None)
+    bad = G.check_fields(result, facts, FIELDS)
+    stats = {"checked": checked, "dropped": 0, "rewritten": 0, "regenerated": False}
+    if not bad:
+        return stats
+    fixed: dict[int, str | None] = {}
+    if spend.usd < spend.cap:
+        stats["regenerated"] = True
+        try:
+            j = D._parse(await D._ask([{"type": "text", "text": _rewrite_prompt(bad, data)}], 900, spend))
+            for it in (j or {}).get("fixes") or []:
+                if isinstance(it, dict) and str(it.get("id", "")).isdigit() and int(it["id"]) < len(bad):
+                    new = str(it.get("text") or "").strip()
+                    if new and G.sentence_problems(new, facts) in (None, []):   # grounded, or no longer about their reels
+                        fixed[int(it["id"])] = new
+        except Exception as e:
+            log.warning("[Personalise] rewrite call failed: %s", type(e).__name__)
+    G.apply_fixes(result, bad, fixed, PLACEHOLDER)
+    stats["rewritten"] = len(fixed)
+    stats["dropped"] = len(bad) - len(fixed)
+    if G.check_fields(result, facts, FIELDS):   # defensive: nothing ungrounded may remain
+        stats["dropped"] += strip_personal(result)
+    return stats
+
+
+async def comparison_block(db, user_id, result: dict, spend: D.Spend, enabled: bool = True, grounding: dict | None = None) -> Optional[dict]:
     """The `creatorDna` block saved on the analysis result, or None when the user has no usable DNA."""
     if not enabled or not personalise_enabled():
         return None
@@ -133,7 +242,8 @@ async def comparison_block(db, user_id, result: dict, spend: D.Spend, enabled: b
     new_fp = await D.fingerprint_text_only(_analysis_text(result), spend)
     return {"personalised": True, "sampleSize": data["dna"].sample_size, "isFixture": bool(data["account"].is_fixture),
             "newFingerprint": new_fp, "comparison": compare(new_fp, data["reels"], dna.get("top") or [], dna.get("bottom") or []),
-            "topReels": dna.get("top") or [], "bottomReels": dna.get("bottom") or [], "costUsd": spend.usd}
+            "topReels": dna.get("top") or [], "bottomReels": dna.get("bottom") or [], "costUsd": spend.usd,
+            "partialReels": dna.get("partial_reels") or [], "grounding": grounding}
 
 
 def measured(data: Optional[dict]) -> Optional[dict]:
@@ -146,4 +256,5 @@ def measured(data: Optional[dict]) -> Optional[dict]:
     return {"isFixture": bool(data["account"].is_fixture), "reels": len(reels), "username": data["account"].username,
             "avgWatchThrough": med.get("avg_watch_through"), "watchThroughReels": len(wt),
             "avgSkipRate": med.get("avg_skip_rate"), "medianReach": med.get("median_reach"), "avgReach": med.get("avg_reach"),
-            "missing": (data["account"].last_import_summary or {}).get("missing_metrics", [])}
+            "missing": (data["account"].last_import_summary or {}).get("missing_metrics", []),
+            "partialReels": sum(1 for r in reels if r["partial"])}

@@ -241,6 +241,7 @@ async def ensure_fresh_token(db, user) -> str | None:
     acct = await get_account(db, user.id)
     if not token or acct is None or acct.is_fixture:
         return token
+    await _encrypt_if_plain(db, user.id)
     left = (acct.token_expires_at - _now()) if acct.token_expires_at else None
     age = (_now() - acct.token_refreshed_at) if acct.token_refreshed_at else timedelta(days=99)
     if left is not None and left < timedelta(days=REFRESH_WHEN_DAYS_LEFT) and left > timedelta(0) and age > timedelta(hours=24):
@@ -254,6 +255,23 @@ async def ensure_fresh_token(db, user) -> str | None:
         except OAuthError as e:
             log.warning("[Instagram] token refresh failed: %s", e)
     return token
+
+
+async def _encrypt_if_plain(db, user_id) -> None:
+    """A token saved before encryption existed is re-saved encrypted the first time it is used (the migration does the same in bulk).
+    Does nothing without TOKEN_ENCRYPTION_KEY. Never raises: the connection keeps working either way."""
+    from sqlalchemy import Text, cast
+    from app.models.user import User
+    from app.studio.instagram import tokencrypt
+    if not tokencrypt.key_configured():
+        return
+    try:
+        raw = (await db.execute(select(cast(User.__table__.c.instagram_access_token, Text)).where(User.id == user_id))).scalar()
+        if raw and not tokencrypt.is_encrypted(raw):
+            await db.execute(update(User).where(User.id == user_id).values(instagram_access_token=raw))   # the column type encrypts
+            await db.commit()
+    except Exception as e:
+        log.warning("[Instagram] could not encrypt the stored token yet: %s", type(e).__name__)
 
 
 async def _delete_derived(db, acct: IgAccount) -> dict:

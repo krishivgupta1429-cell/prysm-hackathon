@@ -48,6 +48,7 @@ class IgReel(Base):
     duration_s = Column(Float)                        # measured from the downloaded file; NULL when the video was not available
     like_count = Column(Integer)
     comments_count = Column(Integer)
+    analysis_level = Column(String(20))               # full (video frames) | thumbnail_caption | caption_only (no video link from Instagram)
     frames_used = Column(Integer, default=0)          # frames sent to the model for the fingerprint (0 = caption only)
     performance_index = Column(Float)                 # reach (else views) / account median across the imported reels
     performance_basis = Column(String(20))            # "reach" or "views"

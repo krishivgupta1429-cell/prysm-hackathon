@@ -30,6 +30,13 @@ from app.studio.tests.fake_redis import FakeRedis
 
 # ------------------------------------------------------------------ helpers
 
+@pytest.fixture(autouse=True)
+def _no_dotenv(monkeypatch):
+    """Tests set their own environment: whatever backend/.env holds (INSTAGRAM_*, TOKEN_ENCRYPTION_KEY) must not leak in."""
+    from app.studio import config
+    monkeypatch.setattr(config, "_dotenv", lambda: {})
+
+
 def aio(fn):
     """Run an async test with asyncio.run (works without the pytest-asyncio plugin)."""
     @functools.wraps(fn)
@@ -265,7 +272,7 @@ def ten_reels(outlier=False):
         idx = 2.0 if good else (0.5 if n >= 8 else 1.0)
         if outlier and n == 1:
             idx = 8.0
-        rs.append(reel(n, idx, 0.7 if good else 0.3, fp("question" if good else "visual_only")))
+        rs.append(reel(n, idx, 0.7 if good else 0.3, fp("question" if good else "visual_only", pacing="fast" if good else "slow")))
     return rs
 
 
@@ -415,6 +422,7 @@ async def dbf():
         async with engine.begin() as conn:
             await conn.run_sync(lambda sc: Base.metadata.create_all(sc, tables=[
                 User.__table__, IgAccount.__table__, IgReel.__table__, IgReelInsight.__table__, CreatorDna.__table__]))
+            await conn.execute(text("ALTER TABLE ig_reel ADD COLUMN IF NOT EXISTS analysis_level VARCHAR(20)"))   # older throwaway database
     except Exception as e:  # no database reachable
         pytest.skip(f"no test database: {type(e).__name__}")
     try:
@@ -466,11 +474,15 @@ class FakeSource:
 
 
 def fake_model(monkeypatch):
-    async def fake_fp(blocks, caption, spend):
+    async def fake_fp(blocks, caption, spend, level="full"):
         spend.add(0.002)
         return fp()
     monkeypatch.setattr(D, "fingerprint_reel", fake_fp)
-    monkeypatch.setattr(D, "_ask", Ask(full_reply()))
+    monkeypatch.setattr(D, "_ask", Ask({   # reels here have no video, so the claims are only about reach (hook/pacing would be ungrounded)
+        "summary": "Reels 7, 8 reached the most people. Reels 2, 3 reached the fewest.",
+        "strongest": [{"claim": "These reels reached the most people", "reels": [7, 8]}],
+        "weakest": [{"claim": "These reels reached the fewest people", "reels": [2, 3]}],
+        "keep": [{"claim": "Keep what the top reels did", "reels": [8]}], "change": [{"claim": "Rework the weakest reels", "reels": [2]}]}))
 
 
 async def run(factory, uid, source, count=8):

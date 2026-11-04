@@ -26,6 +26,7 @@ flower==2.0.1
 
 # ── Auth & Security ───────────────────────────────────────────
 python-jose[cryptography]==3.3.0
+cryptography>=42  # hackathon: Fernet for the Instagram token (already installed through python-jose)
 bcrypt==4.2.1
 passlib==1.7.4
 

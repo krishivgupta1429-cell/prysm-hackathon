@@ -89,7 +89,7 @@ async def _one_reel(src, raw: dict, idx: int, spend: D.Spend, sem: asyncio.Semap
             "media_id": raw["id"], "permalink": raw.get("permalink"), "caption": raw.get("caption"),
             "posted_at": _parse_ts(raw.get("timestamp")), "like_count": raw.get("like_count"),
             "comments_count": raw.get("comments_count"), "duration_s": None, "frames_used": 0, "fingerprint": None,
-            "note": None, "insights": {m: None for m in M.METRICS},
+            "note": None, "insights": {m: None for m in M.METRICS}, "analysis_level": "full",
         }
         notes = []
         try:
@@ -103,15 +103,22 @@ async def _one_reel(src, raw: dict, idx: int, spend: D.Spend, sem: asyncio.Semap
             jpegs, dur = await F.frames_from_download(lambda p: src.download(raw, p))
             rec["duration_s"] = dur
             if not jpegs:
+                # no video file from Instagram (licensed audio, removed media, download failed): say so on the reel, never "fully analysed"
                 thumb = await src.thumbnail(raw)
                 if thumb:
                     jpegs = [thumb]
-                    notes.append("No video link from Instagram (often licensed audio): fingerprint from the thumbnail and caption only.")
+                    rec["analysis_level"] = "thumbnail_caption"
+                    notes.append("No video link from Instagram (often licensed audio): read from the thumbnail and caption only. "
+                                 "No watch-through, and hook, format and pacing are not judged." if dur is None else
+                                 "The video downloaded but no frames could be read: thumbnail and caption only; hook, format and pacing are not judged.")
                 else:
-                    notes.append("No video or thumbnail available: fingerprint from the caption only.")
+                    rec["analysis_level"] = "caption_only"
+                    notes.append("No video or thumbnail from Instagram: read from the caption only. "
+                                 "No watch-through, and hook, format and pacing are not judged.")
             rec["frames_used"] = len(jpegs)
             if spend.room_for_fingerprint():
-                rec["fingerprint"] = await D.fingerprint_reel([F.to_image_block(j) for j in jpegs], raw.get("caption"), spend)
+                rec["fingerprint"] = await D.fingerprint_reel([F.to_image_block(j) for j in jpegs], raw.get("caption"), spend,
+                                                              rec["analysis_level"])
                 if rec["fingerprint"] is None:
                     notes.append("The fingerprint call did not return a usable answer.")
             else:
@@ -166,6 +173,7 @@ async def run_import(*, redis, session_factory, user_id: str, count: int, job_id
         progress("creator_dna", "running")
         reel_dicts = [{"performance_index": r.get("performance_index"), "watch_through": r.get("watch_through"),
                        "fingerprint": r.get("fingerprint"), "caption": r.get("caption"),
+                       "analysis_level": r.get("analysis_level"), "media_id": r.get("media_id"),
                        "posted_at": (r["posted_at"].isoformat() if r.get("posted_at") else ""), "_rec": r} for r in recs]
         built = await D.build_dna(reel_dicts, agg["basis"], agg["missing"], spend) if recs else None
         progress("creator_dna", "ok" if built else "skipped")
@@ -179,6 +187,7 @@ async def run_import(*, redis, session_factory, user_id: str, count: int, job_id
         if record_spend and spend.usd:
             await record_spend(spend.usd)
         summary = {"status": "done", "imported": len(recs), "requested": count, "missing_metrics": agg["missing"],
+                   "partial": sum(1 for r in recs if r.get("analysis_level") != "full"),
                    "rate_limited": bool(state.get("rate_limited")), "token_invalid": bool(state.get("token_invalid")),
                    "cost_usd": spend.usd, "model_calls": spend.calls}
         await _job_write(redis, job_id, **summary)
@@ -213,7 +222,7 @@ async def _replace_data(db, acct: IgAccount, recs: list[dict], built: dict | Non
     for r in recs:
         reel = IgReel(account_id=acct.id, media_id=r["media_id"], permalink=r["permalink"], posted_at=r["posted_at"],
                       caption=r["caption"], duration_s=r["duration_s"], like_count=r["like_count"],
-                      comments_count=r["comments_count"], frames_used=r["frames_used"],
+                      comments_count=r["comments_count"], frames_used=r["frames_used"], analysis_level=r.get("analysis_level"),
                       performance_index=r.get("performance_index"), performance_basis=r.get("performance_basis"),
                       watch_through=r.get("watch_through"), fingerprint=r["fingerprint"], note=r["note"])
         db.add(reel)
@@ -224,6 +233,7 @@ async def _replace_data(db, acct: IgAccount, recs: list[dict], built: dict | Non
     now = datetime.now(timezone.utc)
     acct.last_import_at, acct.last_import_requested = now, requested
     acct.last_import_summary = {"imported": len(recs), "found": found, "requested": requested, "missing_metrics": agg["missing"],
+                                "partial": sum(1 for r in recs if r.get("analysis_level") != "full"),
                                 "rate_limited": bool(state.get("rate_limited")), "token_invalid": bool(state.get("token_invalid"))}
     if built:
         db.add(CreatorDna(account_id=acct.id, user_id=acct.user_id, dna=built["dna"], summary=built["summary"],
