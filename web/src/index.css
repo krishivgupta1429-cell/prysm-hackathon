@@ -393,3 +393,14 @@ html.lenis, html.lenis body { height: auto; }
 .lenis.lenis-smooth [data-lenis-prevent] { overscroll-behavior: contain; }
 .lenis.lenis-stopped { overflow: hidden; }
 .lenis.lenis-smooth iframe { pointer-events: none; }
+
+/* ─── Hackathon: one card style and one motion rule for the results and edit pages ────────────────────────────
+   .p-card is the warm surface the parameter cards already have (the page's own cream, the theme border, 16px radius);
+   .p-fade is the subtle section fade-in; .p-note is the 12px note text with readable contrast. */
+.p-card { background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: 16px; color: hsl(var(--foreground)); }
+.p-fade { animation: fade-slide-in 0.45s ease-out both; }
+.p-note { font-size: 12px; line-height: 1.5; color: #55524b; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+@keyframes p-sweep { 0% { transform: translateX(-110%); } 100% { transform: translateX(280%); } }

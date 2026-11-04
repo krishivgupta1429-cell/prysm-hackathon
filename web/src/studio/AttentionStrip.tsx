@@ -1,12 +1,12 @@
 // Built during the Meta Global AI Developer Hackathon (new work).
-// "This video's rhythm (our estimate)" inside the Viewer behaviour card: ONE plain sentence ("Sound dips at 19-23s ..."), then ONE compact
-// strip (sound level per half second, still stretches shaded, quiet dips outlined) with a small legend. The three separate bar charts
-// (visual change, audio energy, audio change) sit behind "Show details". Every part says "estimate"; no percentages, no predictions of
-// what viewers will do. The quiet windows are the same ones the Audio Energy panel uses (lib/quietWindows). A part the server could not
-// compute says why.
-import { useState } from 'react'
+// "This video's rhythm (our estimate)" inside the Viewer behaviour card: ONE plain sentence, then ONE chart: a smooth soft-filled
+// sound-level line over time, a thin picture-change line, shaded bands only where a real quiet dip or still stretch exists, hover values
+// and a short legend. The three bar charts are gone. Every part says "estimate"; the values are relative to this video (0 to 10), never
+// percentages or predictions of what viewers will do. The quiet windows are the ones the server computed once (lib/quietWindows).
+import { useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { rhythmSentence } from '@/lib/quietWindows'
+import { INK, INK2, tag } from './autoedit/ui'
 
 export type Span = { start: number; end: number; duration?: number }
 export type ViewerAttention = {
@@ -23,98 +23,96 @@ export type ViewerAttention = {
   reasons: { visual_change: string | null; audio_energy: string | null; audio_change: string | null }
 }
 
-const tag: CSSProperties = { fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', padding: '2px 8px', border: '1px solid #d4d4d4', borderRadius: 999, color: '#737373', whiteSpace: 'nowrap' }
-const muted: CSSProperties = { fontSize: 11, color: '#a3a3a3', margin: '6px 0 0', lineHeight: 1.4 }
+const W = 600, H = 150, PAD = 10
 const secs = (s: number) => `${Number.isInteger(s) ? s : s.toFixed(1)} s`
 const span = (s: Span) => `${secs(s.start)} to ${secs(s.end)}`
 const mm = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`
-const STILL = 'rgba(10,10,10,0.13)'
+const STILL = 'rgba(196,136,30,0.20)'
+const QUIET = 'rgba(31,31,31,0.10)'
 
-function Bars({ values, h, dur, spans, kind, label }: { values: (number | null)[]; h: number; dur: number; spans: Span[]; kind: 'still' | 'quiet'; label: string }) {
-  const n = values.length || 1
-  return (
-    <div style={{ position: 'relative', height: h, background: '#fafafa', borderRadius: 8, overflow: 'hidden' }} role="img"
-      aria-label={`${label}, estimate${spans.length ? `; ${kind === 'still' ? 'still' : 'quiet'} stretches at ${spans.map(span).join(', ')}` : ''}`}>
-      {spans.map((s, i) => (
-        <div key={i} data-testid={`mark-${kind}`} title={`${kind === 'still' ? 'Picture barely changes' : 'Much quieter than the rest'}: ${span(s)}`}
-          style={{
-            position: 'absolute', top: 0, bottom: 0, left: `${(s.start / dur) * 100}%`, width: `${Math.max(0.6, ((s.end - s.start) / dur) * 100)}%`,
-            background: kind === 'still' ? STILL : 'rgba(10,10,10,0.05)',
-            border: kind === 'quiet' ? '1.5px dashed #0a0a0a' : 'none', boxSizing: 'border-box',
-          }} />
-      ))}
-      <svg viewBox={`0 0 ${n} 40`} preserveAspectRatio="none" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} aria-hidden="true">
-        {values.map((v, i) => (v == null ? null : <rect key={i} x={i + 0.1} y={40 - v * 38 - 1} width={0.8} height={v * 38 + 1} fill="#0a0a0a" />))}
-      </svg>
-    </div>
-  )
+/** A smooth path through the points (Catmull-Rom turned into cubic Beziers), kept inside the plot. */
+function smooth(pts: [number, number][]): string {
+  if (pts.length < 2) return ''
+  const clampY = (y: number) => Math.max(PAD, Math.min(H - PAD, y))
+  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2
+    const c1: [number, number] = [p1[0] + (p2[0] - p0[0]) / 6, clampY(p1[1] + (p2[1] - p0[1]) / 6)]
+    const c2: [number, number] = [p2[0] - (p3[0] - p1[0]) / 6, clampY(p2[1] - (p3[1] - p1[1]) / 6)]
+    d += ` C ${c1[0].toFixed(1)} ${c1[1].toFixed(1)}, ${c2[0].toFixed(1)} ${c2[1].toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`
+  }
+  return d
 }
 
-function Row({ id, label, values, dur, spans, kind, reason }: {
-  id: string; label: string; values: (number | null)[] | null; dur: number; spans: Span[]; kind: 'still' | 'quiet'; reason: string | null
-}) {
-  return (
-    <div style={{ marginBottom: 12 }} data-testid={`row-${id}`}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4, gap: 8 }}>
-        <span style={{ fontSize: 12, color: '#525252' }}>{label}</span>
-        <span style={tag}>estimate</span>
-      </div>
-      {values ? <Bars values={values} h={48} dur={dur} spans={spans} kind={kind} label={label} />
-        : <div style={{ ...muted, margin: 0, padding: 12, background: '#fafafa', borderRadius: 8 }}>Not available: {reason || 'no reason given'}</div>}
-    </div>
-  )
-}
+function Swatch({ style }: { style: CSSProperties }) { return <span style={{ display: 'inline-block', verticalAlign: 'middle', marginRight: 6, ...style }} /> }
 
 export default function AttentionStrip({ a }: { a: ViewerAttention }) {
-  const [open, setOpen] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  const [hover, setHover] = useState<number | null>(null)
   const dur = a.duration || 1
-  // the compact strip draws the sound level; a video with no usable audio draws the picture change instead
-  const main = a.audio_energy ? { v: a.audio_energy, k: 'quiet' as const, spans: a.loudness_dips, label: 'Sound level' }
-    : a.visual_change ? { v: a.visual_change, k: 'still' as const, spans: a.static_stretches, label: 'Picture change' } : null
+  const sound = a.audio_energy, picture = a.visual_change
+  const x = (i: number, n: number) => (n <= 1 ? 0 : (i / (n - 1)) * W)
+  const y = (v: number) => H - PAD - Math.max(0, Math.min(1, v)) * (H - 2 * PAD)
+  const line = (vals: (number | null)[] | null) => vals ? smooth(vals.map((v, i) => [x(i, vals.length), y(v ?? 0)] as [number, number])) : ''
+  const soundPath = line(sound)
+  const area = soundPath ? `${soundPath} L ${W} ${H - PAD} L 0 ${H - PAD} Z` : ''
+  const at = (t: number | null, vals: (number | null)[] | null) => (t == null || !vals ? null : vals[Math.min(vals.length - 1, Math.max(0, Math.round((t / dur) * (vals.length - 1))))])
+  const ten = (v: number | null | undefined) => (v == null ? '–' : `${Math.round(v * 10)}/10`)
+  const quiet = sound ? a.loudness_dips || [] : []
+  const still = picture ? a.static_stretches || [] : []
+  const nothing = !sound && !picture
+  const move = (e: React.PointerEvent) => {
+    const r = box.current?.getBoundingClientRect()
+    if (!r || !r.width) return
+    setHover(Math.max(0, Math.min(dur, ((e.clientX - r.left) / r.width) * dur)))
+  }
+  const band = (s: Span, kind: 'quiet' | 'still') => (
+    <div key={`${kind}${s.start}`} data-testid={`mark-${kind}`} title={`${kind === 'quiet' ? 'Much quieter than the rest' : 'Picture barely changes'}: ${span(s)}`}
+      style={{ position: 'absolute', top: 0, bottom: 0, left: `${(s.start / dur) * 100}%`, width: `${Math.max(0.8, ((s.end - s.start) / dur) * 100)}%`, background: kind === 'quiet' ? QUIET : STILL,
+        borderLeft: `1px ${kind === 'quiet' ? 'dashed' : 'solid'} ${kind === 'quiet' ? INK : '#c4881e'}`, borderRight: `1px ${kind === 'quiet' ? 'dashed' : 'solid'} ${kind === 'quiet' ? INK : '#c4881e'}`, boxSizing: 'border-box', pointerEvents: 'none' }} />
+  )
   return (
-    <div style={{ borderTop: '1px solid #eee', marginTop: 16, paddingTop: 14 }} data-testid="attention-strip">
+    <div style={{ borderTop: '1px solid hsl(var(--border))', marginTop: 18, paddingTop: 16 }} data-testid="attention-strip">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>This video&rsquo;s rhythm <span style={{ fontWeight: 500, color: '#737373' }}>(our estimate)</span></span>
+        <span style={{ fontSize: 14, fontWeight: 700 }}>This video&rsquo;s rhythm <span style={{ fontWeight: 500, color: INK2 }}>(our estimate)</span></span>
         <span style={tag}>estimate</span>
       </div>
-      <p style={{ fontSize: 14, lineHeight: 1.45, margin: '8px 0 12px', color: '#0a0a0a' }} data-testid="strip-sentence">{rhythmSentence(a)}</p>
-      {main ? (
-        <div data-testid="strip-compact">
-          <Bars values={main.v} h={40} dur={dur} spans={main.spans} kind={main.k} label={main.label} />
-          {main.k === 'quiet' && a.visual_change && a.static_stretches.length > 0 && (
-            <div style={{ position: 'relative', height: 6, marginTop: 4, background: '#f3f3f3', borderRadius: 4 }} aria-label="Stretches where the picture barely changes, estimate" role="img">
-              {a.static_stretches.map((s, i) => (
-                <div key={i} data-testid="mark-still" title={`Picture barely changes: ${span(s)}`}
-                  style={{ position: 'absolute', top: 0, bottom: 0, left: `${(s.start / dur) * 100}%`, width: `${Math.max(0.6, ((s.end - s.start) / dur) * 100)}%`, background: '#737373', borderRadius: 3 }} />
-              ))}
-            </div>
-          )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#a3a3a3', marginTop: 4 }}><span>0:00</span><span>{mm(dur / 2)}</span><span>{mm(dur)}</span></div>
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 11, color: '#737373', marginTop: 8 }} data-testid="strip-legend">
-            <span><span style={{ display: 'inline-block', width: 3, height: 10, background: '#0a0a0a', verticalAlign: 'middle', marginRight: 6 }} />Sound level</span>
-            {main.k === 'quiet' && <span><span style={{ display: 'inline-block', width: 12, height: 10, border: '1.5px dashed #0a0a0a', boxSizing: 'border-box', verticalAlign: 'middle', marginRight: 6 }} />Quiet dip</span>}
-            {main.k === 'quiet' && a.visual_change && a.static_stretches.length > 0 && <span><span style={{ display: 'inline-block', width: 12, height: 6, background: '#737373', borderRadius: 3, verticalAlign: 'middle', marginRight: 6 }} />Picture barely changes</span>}
+      <p style={{ fontSize: 15, lineHeight: 1.5, margin: '8px 0 12px', color: INK }} data-testid="strip-sentence">{rhythmSentence(a)}</p>
+      {!nothing && (
+        <div data-testid="rhythm-chart">
+          <div ref={box} onPointerMove={move} onPointerLeave={() => setHover(null)} style={{ position: 'relative', height: 150, touchAction: 'pan-y', cursor: 'crosshair', borderRadius: 12, background: 'rgba(31,31,31,0.025)', overflow: 'hidden' }}
+            role="img" aria-label={`Sound level over time with a thin picture-change line, estimate. ${rhythmSentence(a)}`}>
+            {quiet.map(s => band(s, 'quiet'))}
+            {still.map(s => band(s, 'still'))}
+            <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} aria-hidden="true">
+              <defs><linearGradient id="soundfill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={INK} stopOpacity="0.28" /><stop offset="1" stopColor={INK} stopOpacity="0.03" /></linearGradient></defs>
+              {area && <path d={area} fill="url(#soundfill)" />}
+              {soundPath && <path d={soundPath} fill="none" stroke={INK} strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />}
+              {picture && <path d={line(picture)} fill="none" stroke="#8a6a2a" strokeWidth="1" vectorEffect="non-scaling-stroke" strokeDasharray="3 3" />}
+            </svg>
+            {hover != null && (
+              <>
+                <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${(hover / dur) * 100}%`, width: 1, background: INK, opacity: 0.55, pointerEvents: 'none' }} />
+                <div data-testid="rhythm-hover" style={{ position: 'absolute', top: 6, left: hover / dur > 0.6 ? undefined : `calc(${(hover / dur) * 100}% + 8px)`, right: hover / dur > 0.6 ? `calc(${(1 - hover / dur) * 100}% + 8px)` : undefined,
+                  background: INK, color: '#fff', borderRadius: 8, padding: '5px 9px', fontSize: 12, lineHeight: 1.4, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+                  {mm(hover)} · sound {ten(at(hover, sound))}{picture ? ` · picture change ${ten(at(hover, picture))}` : ''}
+                </div>
+              </>
+            )}
           </div>
-        </div>
-      ) : null}
-      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
-        style={{ all: 'unset', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#525252', marginTop: 12, textDecoration: 'underline', textUnderlineOffset: 3 }}>
-        {open ? 'Hide details' : 'Show details'}
-      </button>
-      {open && (
-        <div style={{ marginTop: 12 }} data-testid="strip-details">
-          <p style={{ fontSize: 12, color: '#737373', margin: '0 0 12px', lineHeight: 1.4 }}>
-            How much the picture changes, how loud the sound is and how much the sound changes, one bar per half second. {a.note}
-          </p>
-          <Row id="visual" label="Visual change" values={a.visual_change} dur={dur} spans={a.static_stretches} kind="still" reason={a.reasons.visual_change} />
-          <Row id="energy" label="Audio energy (loudness)" values={a.audio_energy} dur={dur} spans={a.loudness_dips} kind="quiet" reason={a.reasons.audio_energy} />
-          <Row id="change" label="Audio change" values={a.audio_change} dur={dur} spans={[]} kind="quiet" reason={a.reasons.audio_change} />
-          <div style={{ fontSize: 12, lineHeight: 1.6, marginTop: 6 }} data-testid="strip-summary">
-            <div><strong>Still stretches:</strong> {a.visual_change ? (a.static_stretches.length ? a.static_stretches.map(span).join(', ') : 'none found') : 'not available'}</div>
-            <div><strong>Quiet dips:</strong> {a.audio_energy ? (a.loudness_dips.length ? a.loudness_dips.map(span).join(', ') : 'none found') : 'not available'}</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: INK2, marginTop: 4 }}><span>0:00</span><span>{mm(dur / 2)}</span><span>{mm(dur)}</span></div>
+          <div style={{ display: 'flex', gap: '6px 16px', flexWrap: 'wrap', fontSize: 12, color: INK2, marginTop: 8 }} data-testid="strip-legend">
+            {sound && <span><Swatch style={{ width: 16, height: 3, background: INK, borderRadius: 2 }} />Sound level</span>}
+            {picture && <span><Swatch style={{ width: 16, height: 0, borderTop: '1px dashed #8a6a2a' }} />Picture change</span>}
+            {quiet.length > 0 && <span><Swatch style={{ width: 12, height: 12, background: QUIET, border: `1px dashed ${INK}`, boxSizing: 'border-box' }} />Quiet dip</span>}
+            {still.length > 0 && <span><Swatch style={{ width: 12, height: 12, background: STILL, border: '1px solid #c4881e', boxSizing: 'border-box' }} />Picture barely changes</span>}
           </div>
         </div>
       )}
+      <p className="p-note" style={{ margin: '8px 0 0' }} data-testid="strip-note">
+        {a.note || 'Estimates from the picture and the sound of this video, not measured viewer data.'} Values run 0 to 10 relative to this video.
+        {!sound && a.reasons.audio_energy ? ` Sound: not available (${a.reasons.audio_energy}).` : ''}{!picture && a.reasons.visual_change ? ` Picture: not available (${a.reasons.visual_change}).` : ''}
+      </p>
     </div>
   )
 }

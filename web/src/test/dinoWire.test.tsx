@@ -16,38 +16,45 @@ const strip: ViewerAttention = {
   reasons: { visual_change: null, audio_energy: null, audio_change: null },
 }
 
-describe('AttentionStrip', () => {
-  it('says the rhythm in one sentence, draws ONE compact strip with a legend and keeps the three charts behind Show details', () => {
+describe('AttentionStrip (one rhythm chart)', () => {
+  it('says the rhythm in one sentence and draws ONE chart with bands only where a real dip or still stretch exists, a legend and the estimate tag', () => {
     const { container } = render(<AttentionStrip a={strip} />)
     expect(screen.getByTestId('strip-sentence').textContent).toContain('Sound dips at 1.5-3s')
     expect(screen.getByTestId('strip-sentence').textContent).toContain('picture barely changes at 1.5-3.5s')
-    expect(screen.getByTestId('strip-compact')).toBeTruthy()
+    expect(screen.getAllByTestId('rhythm-chart')).toHaveLength(1)
+    expect(screen.getAllByTestId('mark-quiet')).toHaveLength(1)
+    expect(screen.getAllByTestId('mark-still')).toHaveLength(1)
     expect(screen.getByTestId('strip-legend').textContent).toContain('Quiet dip')
-    expect(screen.queryByTestId('row-visual')).toBeNull()
-    expect(screen.queryByTestId('strip-details')).toBeNull()
     expect(screen.getAllByText('estimate').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByText('Show details')).toBeNull()                      // the three bar charts are gone
+    expect(container.querySelectorAll('rect').length).toBe(0)                  // no barcode
     expect(container.textContent).not.toContain('%')
-    fireEvent.click(screen.getByText('Show details'))
-    expect(screen.getByTestId('row-visual')).toBeTruthy()
-    expect(screen.getByTestId('row-energy')).toBeTruthy()
-    expect(screen.getByTestId('row-change')).toBeTruthy()
-    expect(screen.getByTestId('strip-summary').textContent).toContain('1.5 s to 3.5 s')
-    expect(screen.getAllByText('estimate').length).toBeGreaterThanOrEqual(4)
-    fireEvent.click(screen.getByText('Hide details'))
-    expect(screen.queryByTestId('strip-details')).toBeNull()
   })
-  it('the sentence and the detail list use the same quiet windows (no "none found" next to a flagged dip)', () => {
+  it('shows no band and no legend entry for a dip that does not exist', () => {
+    render(<AttentionStrip a={{ ...strip, loudness_dips: [], static_stretches: [] }} />)
+    expect(screen.queryAllByTestId('mark-quiet')).toHaveLength(0)
+    expect(screen.queryAllByTestId('mark-still')).toHaveLength(0)
+    expect(screen.getByTestId('strip-legend').textContent).not.toContain('Quiet dip')
+    expect(screen.getByTestId('strip-sentence').textContent).toContain('No long quiet or still stretch')
+  })
+  it('shows hover values as relative 0 to 10 numbers, not percentages', () => {
+    render(<AttentionStrip a={strip} />)
+    ;(window as unknown as { PointerEvent: unknown }).PointerEvent = MouseEvent   // jsdom has no PointerEvent
+    const chart = screen.getByRole('img', { name: /Sound level over time/ })
+    chart.getBoundingClientRect = () => ({ left: 0, top: 0, right: 600, bottom: 150, width: 600, height: 150, x: 0, y: 0, toJSON() {} }) as DOMRect
+    fireEvent.pointerMove(chart, { clientX: 300 })
+    const tip = screen.getByTestId('rhythm-hover').textContent || ''
+    expect(tip).toMatch(/0:03 · sound \d+\/10 · picture change \d+\/10/)
+    expect(tip).not.toContain('%')
+  })
+  it('the sentence and the window list use the same quiet windows', () => {
     render(<AttentionStrip a={{ ...strip, loudness_dips: [{ start: 19, end: 23 }, { start: 24, end: 27 }], duration: 30 }} />)
     expect(screen.getByTestId('strip-sentence').textContent).toContain('Sound dips at 19-23s and 24-27s')
-    fireEvent.click(screen.getByText('Show details'))
-    expect(screen.getByTestId('strip-summary').textContent).toContain('19 s to 23 s, 24 s to 27 s')
-    expect(screen.getByTestId('strip-summary').textContent).not.toContain('Quiet dips: none found')
+    expect(screen.getAllByTestId('mark-quiet')).toHaveLength(2)
   })
   it('says why a part is missing instead of drawing it', () => {
     render(<AttentionStrip a={{ ...strip, visual_change: null, static_stretches: [], reasons: { ...strip.reasons, visual_change: 'DINOv2 is off' } }} />)
-    fireEvent.click(screen.getByText('Show details'))
-    expect(screen.getByTestId('row-visual').textContent).toContain('Not available: DINOv2 is off')
-    expect(screen.getByTestId('strip-summary').textContent).toContain('not available')
+    expect(screen.getByTestId('strip-note').textContent).toContain('Picture: not available (DINOv2 is off)')
   })
 })
 
@@ -74,6 +81,9 @@ describe('ClosestReelView', () => {
     render(<MemoryRouter><ClosestReelView c={closest} /></MemoryRouter>)
     expect(screen.getByTestId('closest-headline').textContent).toContain('Closest to your Reel 2')
     expect(screen.getAllByTestId('closest-item')).toHaveLength(2)
+    expect(screen.getByTestId('closest-bar').textContent).toContain('similarity 0.91 of 1')
+    expect(screen.getByTestId('closest-others').textContent).toContain('See others (1)')
+    expect(screen.getByTestId('closest-thumb')).toBeTruthy()
     expect(screen.getAllByTestId('closest-lines')[0].textContent).toContain('Reached 2,000 accounts (40% below your usual)')
     expect(screen.getByTestId('closest-honest-note').textContent).toContain('pictures, not results')
     expect(screen.getByTestId('closest-small-sample').textContent).toContain('fewer than 3')

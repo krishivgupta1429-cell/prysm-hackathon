@@ -294,3 +294,13 @@ def test_a_clean_cut_keeps_only_safe_pauses_and_loudness():
            Op(id="caps", type="caption_burn", group="text", reason="r", params={}),
            Op(id="off_silence", type="cut_segment", group="pacing", reason="r", enabled=False, params={"start": 5.0, "end": 6.0})]
     assert O.clean_cut_ids(EDL(ops=ops)) == {"auto_silence1", "auto_loud"}
+
+
+def test_toggle_takes_a_whole_group_in_one_rerender(ctx):
+    st = finished_state(ctx)
+    base = f"/prysm/auto-edit/{ctx.aid}/toggle"
+    r = ctx.client.post(base, json={"op_ids": ["o1", "o2"], "enabled": False})
+    assert r.status_code == 200 and len(ctx.spawned) == 1
+    assert {c["id"]: c["enabled"] for c in r.json()["changes"]} == {"o1": False, "o2": False}
+    assert ctx.client.post(base, json={"enabled": False}).status_code in (409, 422)
+    assert ctx.client.post(base, json={"op_ids": ["nope"], "enabled": True}).status_code in (404, 409)

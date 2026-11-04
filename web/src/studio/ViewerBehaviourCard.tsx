@@ -13,6 +13,8 @@ import { apiUrl } from '@/lib/api'
 import { authFetch, getToken } from '@/lib/auth'
 import { SHOW_QWEN_CARD } from '@/lib/config'
 import AttentionStrip, { type ViewerAttention } from './AttentionStrip'
+import { useCountUp } from '@/lib/motion'
+import { card, INK2 } from './autoedit/ui'
 
 export type QAlign = { quality: number; aesthetic: number; band: string; scale?: number[]; source?: string }
 export type Engagement = {
@@ -35,24 +37,23 @@ const SOURCE_LABEL: Record<string, string> = { evqa: 'LMM-EVQA', qwen_zero_shot:
 const HOOK: Record<string, string> = { low: 'strong hook', medium: 'average hook', high: 'weak hook' }
 const RETAIN: Record<string, string> = { low: 'high retention', medium: 'average retention', high: 'low retention' }
 
-const box: CSSProperties = { border: '1px solid hsl(var(--border))', borderRadius: 16, padding: 20, background: 'hsl(var(--background))', color: 'hsl(var(--foreground))' }
-const tag: CSSProperties = { fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', padding: '2px 8px', border: '1px solid #d4d4d4', borderRadius: 999, color: '#737373', whiteSpace: 'nowrap' }
-const sub: CSSProperties = { fontSize: 12, color: '#737373', margin: '4px 0 16px', lineHeight: 1.4 }
-const track: CSSProperties = { height: 8, background: '#f0f0f0', borderRadius: 999, overflow: 'hidden' }
+const tag: CSSProperties = { fontSize: 12, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', padding: '2px 8px', border: '1px solid hsl(var(--border))', borderRadius: 999, color: INK2, whiteSpace: 'nowrap' }
+const sub: CSSProperties = { fontSize: 12, color: INK2, margin: '4px 0 16px', lineHeight: 1.5 }
+const track: CSSProperties = { height: 8, background: 'rgba(31,31,31,0.08)', borderRadius: 999, overflow: 'hidden' }
 
 function Bar({ label, value, caption, note }: { label: string; value: number; caption: string; note: string }) {
   const pct = Math.max(0, Math.min(100, value))
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
-        <span style={{ fontSize: 13, color: '#525252' }}>{label}</span>
+        <span style={{ fontSize: 13, color: '#403d37' }}>{label}</span>
         <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ fontSize: 15, fontWeight: 800 }}>{Math.round(pct)}%</span>
           <span style={tag}>{caption}</span>
         </span>
       </div>
-      <div style={track}><div style={{ width: `${pct}%`, height: '100%', background: '#0a0a0a', borderRadius: 999 }} /></div>
-      <p style={{ fontSize: 11, color: '#a3a3a3', margin: '4px 0 0' }}>{note}</p>
+      <div style={track}><div style={{ width: `${pct}%`, height: '100%', background: '#1f1f1f', borderRadius: 999 }} /></div>
+      <p style={{ fontSize: 12, color: '#55524b', margin: '4px 0 0' }}>{note}</p>
     </div>
   )
 }
@@ -60,19 +61,19 @@ function Bar({ label, value, caption, note }: { label: string; value: number; ca
 function QualityPanel({ q }: { q: QAlign }) {
   const pos = (v: number) => `${Math.max(0, Math.min(100, ((v - 1) / 4) * 100))}%`
   return (
-    <div style={{ ...box, background: '#fafafa' }}>
+    <div className="p-card" style={{ padding: 20 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
         <h3 style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>Visual quality signal</h3>
         <span style={tag}>Q-Align</span>
       </div>
       <p style={sub}>How good the picture looks, scored 1 to 5. Not a watch prediction.</p>
       <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1 }}>{q.band}</div>
-      <div style={{ fontSize: 13, color: '#525252', margin: '6px 0 14px' }}>{q.quality.toFixed(1)} / 5 video quality</div>
-      <div style={{ position: 'relative', height: 4, background: '#e5e5e5', borderRadius: 999 }}>
-        <div style={{ position: 'absolute', top: -4, left: pos(q.quality), width: 12, height: 12, marginLeft: -6, background: '#0a0a0a', borderRadius: 999 }} />
+      <div style={{ fontSize: 13, color: '#403d37', margin: '6px 0 14px' }}>{q.quality.toFixed(1)} / 5 video quality</div>
+      <div style={{ position: 'relative', height: 4, background: 'rgba(31,31,31,0.12)', borderRadius: 999 }}>
+        <div style={{ position: 'absolute', top: -4, left: pos(q.quality), width: 12, height: 12, marginLeft: -6, background: '#1f1f1f', borderRadius: 999 }} />
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#a3a3a3', marginTop: 8 }}><span>Bad</span><span>Poor</span><span>Fair</span><span>Good</span><span>Excellent</span></div>
-      <div style={{ fontSize: 12, color: '#737373', marginTop: 12 }}>Aesthetics {q.aesthetic.toFixed(1)} / 5</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#55524b', marginTop: 8 }}><span>Bad</span><span>Poor</span><span>Fair</span><span>Good</span><span>Excellent</span></div>
+      <div style={{ fontSize: 12, color: '#55524b', marginTop: 12 }}>Aesthetics {q.aesthetic.toFixed(1)} / 5</div>
     </div>
   )
 }
@@ -84,11 +85,13 @@ export type Measured = {
 
 const SMALL_SAMPLE_BELOW = 5
 
-function Line({ label, value, testid }: { label: string; value: string; testid: string }) {
+function Tile({ label, value, unit, testid }: { label: string; value: number | null | undefined; unit: string; testid: string }) {
+  const v = useCountUp(value ?? null)
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, padding: '7px 0', borderTop: '1px solid #f0f0f0' }} data-testid={testid}>
-      <span style={{ fontSize: 13, color: '#525252' }}>{label}</span>
-      <span style={{ fontSize: 15, fontWeight: 800, textAlign: 'right' }}>{value}</span>
+    <div style={{ ...card, padding: '12px 12px 10px', minWidth: 0 }} data-testid={testid}>
+      <div style={{ fontSize: 12, color: INK2, lineHeight: 1.3 }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 800, lineHeight: 1.15, marginTop: 4 }}>{v == null ? 'n/a' : Math.round(v).toLocaleString()}</div>
+      <div style={{ fontSize: 12, color: INK2, lineHeight: 1.3 }}>{v == null ? 'not available' : unit}</div>
     </div>
   )
 }
@@ -107,31 +110,32 @@ export default function ViewerBehaviourCard({ ep, attention }: { ep?: Engagement
   const unavailable = !ep || ep.available === false || ep.ecr == null || ep.nawp == null
   const showEstimate = !unavailable && (ep!.source === 'evqa' || (ep!.source === 'qwen_zero_shot' && SHOW_QWEN_CARD))
   const n = m?.reels ?? 0
-  const na = 'not available'
-  return (
+    return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16, marginBottom: 16 }}>
-      <div style={{ ...box, padding: 18 }} data-testid="viewer-behaviour">
+      <div className="p-card p-fade" style={{ padding: 18 }} data-testid="viewer-behaviour">
         <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Viewer behaviour</h2>
 
         {m ? (
           <div data-testid="measured" style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <h3 style={sectionTitle}>Your account so far <span style={{ fontWeight: 500, color: '#737373' }}>(measured)</span></h3>
+              <h3 style={sectionTitle}>Your account so far <span style={{ fontWeight: 500, color: '#55524b' }}>(measured)</span></h3>
               <span style={tag}>{m.isFixture ? 'Test data' : 'Measured'}</span>
             </div>
-            <Line testid="m-watched" label="Usually watched" value={m.avgWatchThrough == null ? na : `${Math.round(m.avgWatchThrough * 100)}% of a reel`} />
-            <Line testid="m-skipped" label="Skipped early" value={m.avgSkipRate == null ? na : `${Math.round(m.avgSkipRate)}% of views`} />
-            <Line testid="m-reach" label="Typical reach" value={m.medianReach == null ? na : `${Math.round(m.medianReach).toLocaleString()} accounts`} />
-            <p style={{ fontSize: 11, color: '#737373', margin: '8px 0 0', lineHeight: 1.45 }} data-testid="m-basis">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, marginTop: 8 }} data-testid="m-tiles">
+              <Tile testid="m-watched" label="Usually watched" value={m.avgWatchThrough == null ? null : m.avgWatchThrough * 100} unit="% of a reel" />
+              <Tile testid="m-skipped" label="Skipped early" value={m.avgSkipRate} unit="% of views" />
+              <Tile testid="m-reach" label="Typical reach" value={m.medianReach} unit="accounts" />
+            </div>
+            <p className="p-note" style={{ margin: '8px 0 0' }} data-testid="m-basis">
               Based on your last {n} reel{n === 1 ? '' : 's'}
-              {n < SMALL_SAMPLE_BELOW && <span style={{ ...tag, marginLeft: 8, color: '#0a0a0a', borderColor: '#0a0a0a' }} data-testid="m-small">small sample</span>}
+              {n < SMALL_SAMPLE_BELOW && <span style={{ ...tag, marginLeft: 8, color: '#1f1f1f', borderColor: '#1f1f1f' }} data-testid="m-small">small sample</span>}
               {m.isFixture ? ' · TEST DATA from the development fixture' : ''}
               {m.avgWatchThrough != null && m.partialReels ? ` · ${m.partialReels} reel${m.partialReels === 1 ? '' : 's'} had no watch time from Instagram` : ''}
             </p>
           </div>
         ) : m === null ? (
-          <p style={{ ...sub, color: '#0a0a0a', fontSize: 14, margin: '12px 0 0' }} data-testid="connect-line">
-            <Link to="/creator-dna" style={{ color: '#0a0a0a', fontWeight: 700 }}>Connect Instagram to see viewer behaviour measured from your own reels</Link>
+          <p style={{ ...sub, color: '#1f1f1f', fontSize: 14, margin: '12px 0 0' }} data-testid="connect-line">
+            <Link to="/creator-dna" style={{ color: '#1f1f1f', fontWeight: 700 }}>Connect Instagram to see viewer behaviour measured from your own reels</Link>
           </p>
         ) : <p style={{ ...sub, margin: '12px 0 0' }}>Loading…</p>}
 

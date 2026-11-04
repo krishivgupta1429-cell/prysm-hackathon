@@ -122,7 +122,7 @@ def public_state(st: dict) -> dict:
         verdict = g.get("status", "pending")
         op_rev = (out.get("op_reverts") or {}).get(o["id"])
         changes.append({"id": o["id"], "type": o["type"], "group": o["group"], "label": label, "reason": o.get("reason", ""),
-                        "params": {k: v for k, v in (o.get("params") or {}).items() if k in ("start", "end", "at", "role", "text", "anchor", "word", "scale", "target_lufs", "effect", "kind")},
+                        "params": {k: v for k, v in (o.get("params") or {}).items() if k in ("start", "end", "at", "role", "text", "anchor", "word", "scale", "duration", "target_lufs", "effect", "kind")},
                         "target_parameter": o.get("target_parameter", ""), "source_step_id": o.get("source_step_id"), "enabled": o["enabled"],
                         "verdict": "reverted" if op_rev else verdict, "verdict_reasons": [op_rev] if op_rev else g.get("reasons", []), "user_override": o["id"] in overrides, "finding": o.get("finding", ""),
                         "effect_options": (_sfx.MOMENT_EFFECTS.get(o["params"].get("kind"), []) if o["type"] == "sfx_hit" else []),
@@ -228,7 +228,8 @@ class StartBody(BaseModel):
 
 
 class ToggleBody(BaseModel):
-    op_id: str
+    op_id: str | None = None
+    op_ids: list[str] | None = None      # a whole group at once: one re-render for all of them
     enabled: bool
 
 
@@ -331,18 +332,24 @@ async def toggle(analysis_id: str, body: ToggleBody, current_user: User = Depend
     rec, st = await _owned_state(analysis_id, current_user, db)
     _need_idle(st)
     ops = (st.get("edl") or {}).get("ops", [])
-    op = next((o for o in ops if o["id"] == body.op_id), None)
-    if not op:
+    ids = list(dict.fromkeys(body.op_ids or ([body.op_id] if body.op_id else [])))
+    if not ids or len(ids) > 40:
+        raise HTTPException(status_code=422, detail="Name the change (op_id) or a list of changes (op_ids).")
+    picked = [next((o for o in ops if o["id"] == i), None) for i in ids]
+    if any(o is None for o in picked):
         raise HTTPException(status_code=404, detail="Unknown change.")
-    if op["enabled"] == body.enabled:
+    todo = [o for o in picked if o["enabled"] != body.enabled]
+    if not todo:
         return public_state(st)
     uid = _uid(current_user.id)
     if not await _acquire_user(uid):
         raise HTTPException(status_code=409, detail="You already have an edit running.")
-    op["enabled"] = body.enabled
-    st.setdefault("overrides", {})[body.op_id] = body.enabled
+    for o in todo:
+        o["enabled"] = body.enabled
+        st.setdefault("overrides", {})[o["id"]] = body.enabled
     st["status"] = "running"
-    _spawn(_job("rerender", st, dict(rec.raw_result or {}), uid, summary=f"{'on' if body.enabled else 'off'}: {op['type'].replace('_', ' ')}"))
+    what = todo[0]["type"].replace("_", " ") if len(todo) == 1 else f"{len(todo)} changes"
+    _spawn(_job("rerender", st, dict(rec.raw_result or {}), uid, summary=f"{'on' if body.enabled else 'off'}: {what}"))
     return public_state(st)
 
 

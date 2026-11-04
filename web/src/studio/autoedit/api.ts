@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiUrl } from '@/lib/api'
 import { authFetch, getToken } from '@/lib/auth'
 
-export type Change = { id: string; type: string; group: string; label: string; reason: string; target_parameter: string; enabled: boolean; verdict: string; verdict_reasons: string[]; user_override: boolean; risk?: string; finding?: string; effect_options?: string[] }
+export type Change = { params?: { start?: number; end?: number; at?: number; role?: string; text?: string; anchor?: string; word?: string; scale?: number; duration?: number; target_lufs?: number; effect?: string; kind?: string }; id: string; type: string; group: string; label: string; reason: string; target_parameter: string; enabled: boolean; verdict: string; verdict_reasons: string[]; user_override: boolean; risk?: string; finding?: string; effect_options?: string[] }
 export type Metrics = { duration_s?: number; lufs?: number | null; true_peak_db?: number | null; silence_ratio?: number; cut_count?: number; avg_shot_s?: number; black_frames?: number; frozen_frames?: number }
 export type Group = { label: string; status: string; risk?: string; reasons: string[]; target: string; critic?: { verdict: string; reasons: string[]; defects: { flag: string; severity: string; detail?: string }[] } | null; metrics_after?: Metrics; objective?: { checks: { name: string; ok: boolean; detail: string; warn?: boolean }[]; ok: boolean } }
 export type Tip = { step_id?: string; parameter: string; tip: string; why_manual?: string }
@@ -22,9 +22,12 @@ export type State = {
   style_notes?: string[]
   decisions?: { area: string; text: string }[]; critic?: { mode?: string; verdict?: string; notes?: string } | null
   timing?: { total_s?: number; stages?: Record<string, number> }
+  clean_cut?: { running?: boolean; ready?: boolean; ops?: number; error?: string | null }
 }
 export type Resp = { eligible: boolean; reason: string; state: State | null }
 
+/** How many silent gaps the edit cut out (the kept `auto_silence` cuts). */
+export const pausesRemoved = (st: State | null | undefined) => keptChanges(st).filter(c => c.type === 'cut_segment' && c.id.startsWith('auto_silence')).length
 export const keptChanges = (st: State | null | undefined) => (st?.changes || []).filter(c => c.enabled && c.verdict === 'kept')
 
 export function useAutoEdit(analysisId?: string, pollMs = 2500) {
@@ -49,7 +52,7 @@ export function useAutoEdit(analysisId?: string, pollMs = 2500) {
     authFetch(apiUrl('/prysm/auto-edit/available')).then(r => { setEnabled(r.ok); if (r.ok) load() }).catch(() => setEnabled(false))
   }, [analysisId, load])
 
-  const running = !!data?.state?.running
+  const running = !!data?.state?.running || !!data?.state?.clean_cut?.running
   useEffect(() => {
     window.clearInterval(timer.current)
     if (running) timer.current = window.setInterval(load, pollMs)

@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { apiUrl } from '@/lib/api'
 import { authFetch, getToken } from '@/lib/auth'
+import { useCountUp } from '@/lib/motion'
 
 export type Closest = {
   connected?: boolean
@@ -19,42 +20,76 @@ export type Closest = {
   missing_embeddings?: number
   small_sample?: boolean
   small_sample_note?: string | null
-  ranked: { n: number; similarity: number; band: string; permalink: string | null; postedAt: string | null; partial: boolean; lines: string[]; hookWords: string | null }[]
+  ranked: { n: number; thumbnailUrl?: string | null; similarity: number; band: string; permalink: string | null; postedAt: string | null; partial: boolean; lines: string[]; hookWords: string | null }[]
 }
 
-const LABEL = 'text-[10px] font-bold tracking-widest uppercase text-foreground/30 font-body'
+const LABEL = 'text-[11px] font-bold tracking-widest uppercase text-foreground/60 font-body'
 const EMOJI = "'Manrope', 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif"
+
+function Thumb({ url, n }: { url?: string | null; n: number }) {
+  const [bad, setBad] = useState(false)
+  const src = url ? (url.startsWith('/') ? apiUrl(url) : url) : null
+  return (
+    <div style={{ width: 64, height: 114, borderRadius: 10, overflow: 'hidden', flex: 'none', background: 'rgba(31,31,31,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} data-testid="closest-thumb">
+      {src && !bad ? <img src={src} alt={`Reel ${n}`} onError={() => setBad(true)} referrerPolicy="no-referrer" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        : <span style={{ fontSize: 12, color: '#55524b', textAlign: 'center', padding: 4 }}>Reel {n}</span>}
+    </div>
+  )
+}
+
+function SimilarityBar({ value, band }: { value: number; band: string }) {
+  const v = useCountUp(value * 100)
+  return (
+    <div style={{ marginTop: 8 }} data-testid="closest-bar">
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#55524b', marginBottom: 4, gap: 8 }}>
+        <span>{band}</span><span>similarity {value.toFixed(2)} of 1</span>
+      </div>
+      <div style={{ height: 8, borderRadius: 999, background: 'rgba(31,31,31,0.08)', overflow: 'hidden' }}>
+        <div style={{ width: `${Math.max(2, Math.min(100, v ?? 0))}%`, height: '100%', background: '#1f1f1f', borderRadius: 999 }} />
+      </div>
+    </div>
+  )
+}
 
 export function ClosestReelView({ c, embedded = false }: { c: Closest; embedded?: boolean }) {
   const best = c.ranked?.[0]
   if (!c.available || !best) return null          // nothing real to show: no card, no "not available" text on the results page
-  const shell = embedded ? 'mt-4 pt-4 border-t border-border' : 'rounded-2xl border border-border bg-background p-5 mb-4 text-foreground'
+  const others = c.ranked.slice(1)
+  const shell = embedded ? 'mt-4 pt-4 border-t border-border' : 'p-card p-fade p-4 sm:p-5 mb-4'
   return (
     <div className={shell} data-testid="closest-reel">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className={LABEL}>Looks most like your own reels</p>
-        <span className="inline-block text-[9px] font-bold tracking-[0.12em] uppercase px-2 py-0.5 border border-border rounded-full text-foreground/45 whitespace-nowrap font-body">estimate</span>
+        <span className="inline-block text-[10px] font-bold tracking-[0.1em] uppercase px-2 py-0.5 border border-border rounded-full text-foreground/70 whitespace-nowrap font-body">estimate</span>
       </div>
-      <h3 className="font-display text-[17px] font-black tracking-tight mt-1" data-testid="closest-headline">
-        Closest to your Reel {best.n} <span className="font-body text-[13px] font-bold text-foreground/50">· {best.band} (similarity {best.similarity.toFixed(2)})</span>
-      </h3>
-      <p className="text-[12px] text-foreground/55 font-body mt-0.5">{c.isFixture ? 'TEST DATA from the development fixture. ' : ''}Similarity runs from 0 (nothing alike) to 1 (the same pictures).</p>
-      <ul className="divide-y divide-border mt-2" data-testid="closest-list">
-        {c.ranked.map((r, i) => (
-          <li key={r.n} className="py-2.5" data-testid="closest-item">
-            <p className="text-[13px] font-body">
-              <b>Reel {r.n}</b>{' '}<span className="text-foreground/50">· {r.band} (similarity {r.similarity.toFixed(2)}){i === 0 ? ' · closest' : ''}</span>
-              {r.permalink && !c.isFixture && <> · <a href={r.permalink} target="_blank" rel="noreferrer" className="underline underline-offset-2 text-foreground/60">open on Instagram</a></>}
-            </p>
-            <p className="text-[12px] text-foreground/65 font-body mt-0.5" data-testid="closest-lines">{r.lines.join(' · ')}</p>
-            {i === 0 && r.hookWords && <p className="text-[12px] text-foreground/45 font-body mt-0.5" style={{ fontFamily: EMOJI }}>Opens with &ldquo;{r.hookWords}&rdquo;</p>}
-            {r.partial && <p className="text-[11px] text-foreground/40 font-body mt-0.5">Read from thumbnail and caption only; the video file was not available.</p>}
-          </li>
-        ))}
-      </ul>
+      <div style={{ display: 'flex', gap: 14, marginTop: 10, alignItems: 'flex-start' }} data-testid="closest-item">
+        <Thumb url={best.thumbnailUrl} n={best.n} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <h3 className="font-display text-[17px] font-black tracking-tight" data-testid="closest-headline">Closest to your Reel {best.n}</h3>
+          <SimilarityBar value={best.similarity} band={best.band} />
+          <p className="text-[13px] text-foreground/80 font-body mt-2" data-testid="closest-lines">{best.lines.join(' · ')}</p>
+          {best.hookWords && <p className="text-[12px] text-foreground/65 font-body mt-1" style={{ fontFamily: EMOJI }}>Opens with &ldquo;{best.hookWords}&rdquo;</p>}
+          {best.partial && <p className="p-note mt-1">Read from thumbnail and caption only; the video file was not available.</p>}
+          {best.permalink && !c.isFixture && <a href={best.permalink} target="_blank" rel="noreferrer" className="text-[12px] underline underline-offset-2 text-foreground/70 font-body inline-block mt-1">Open on Instagram</a>}
+        </div>
+      </div>
+      <p className="p-note mt-2">{c.isFixture ? 'TEST DATA from the development fixture. ' : ''}Similarity runs from 0 (nothing alike) to 1 (the same pictures).</p>
+      {others.length > 0 && (
+        <details className="mt-2" data-testid="closest-others">
+          <summary className="cursor-pointer text-[13px] font-semibold font-body text-foreground/80">See others ({others.length})</summary>
+          <ul className="divide-y divide-border mt-1" data-testid="closest-list">
+            {others.map(r => (
+              <li key={r.n} className="py-2.5" data-testid="closest-item">
+                <p className="text-[13px] font-body"><b>Reel {r.n}</b> <span className="text-foreground/70">· {r.band} (similarity {r.similarity.toFixed(2)})</span></p>
+                <p className="text-[12px] text-foreground/70 font-body mt-0.5" data-testid="closest-lines">{r.lines.join(' · ')}</p>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       {c.small_sample && c.small_sample_note && <p className="text-[12px] font-body mt-2 leading-snug" data-testid="closest-small-sample">{c.small_sample_note}</p>}
       {!!c.missing_embeddings && !!c.compared_with && (
-        <p className="text-[11px] text-foreground/40 font-body mt-2" data-testid="closest-missing">
+        <p className="p-note mt-2" data-testid="closest-missing">
           {c.missing_embeddings} of your {c.own_reels} imported reel{c.own_reels === 1 ? '' : 's'} could not be compared yet.{' '}
           <Link to="/creator-dna" className="underline underline-offset-2">Compute picture matching</Link>
         </p>

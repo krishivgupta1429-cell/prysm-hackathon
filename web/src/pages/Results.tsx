@@ -745,9 +745,9 @@ export default function Results({ injected }: { injected?: Record<string, unknow
 
               {/* Audio Energy Curve — Pro+ */}
               {result.energyCurve?.curve?.length ? (
-                canSeeAudioCurve ? (
+                canSeeAudioCurve ? (result.viewerAttention?.audio_energy && canSeePrediction ? null : (  /* the rhythm chart in Viewer behaviour replaces this panel: one rhythm chart only */
                   <AudioEnergyCurve energy={result.energyCurve} attention={result.viewerAttention} />
-                ) : (
+                )) : (
                   <div className="shrink-0 border border-border rounded-xl p-4 bg-background relative overflow-hidden">
                     <div className="flex items-center justify-between mb-3">
                       <p className="text-[10px] font-semibold tracking-widest uppercase text-foreground/30">Audio Energy</p>
