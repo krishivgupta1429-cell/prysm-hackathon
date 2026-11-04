@@ -16,7 +16,7 @@ Everything is labelled **estimate**. Nothing is invented: when the model service
 | Audio curves (energy, change, onsets/beats) | `.../dino/audio.py` |
 | Attention strip + planner JSON | `.../dino/attention.py` |
 | `embed_reel`, `nearest_reels` | `.../dino/store.py` |
-| Tables | `backend/app/models/dino_embedding.py`, migration `n4o5p6q7r8s9` |
+| Tables | `backend/app/models/dino_embedding.py`, migration `s9t0u1v2w3x4` |
 | Dev API (`DEV_DINO=1`, login) | `.../dino/router.py` |
 | Dev page `/dev/dino` (`VITE_DEV_DINO=1`) | `web/src/studio/DevDino.tsx` |
 | Dev fixtures (local DB only) | `backend/scripts/dino_dev_fixtures.py` |
@@ -147,5 +147,5 @@ Times are seconds of the original video. A list is empty when its source is unav
 2. **Edit verifier**: after the render, call `render_integrity(original, edited, edl)`; block or warn on `ok == false`, show the flagged segments. Treat a mismatch right after a cut as "the EDL and the render disagree" first (see the saree finding). Add a face check for the cut-off-face case.
 3. **Comparison card**: call `embed_reel` for the analysis video, `save_analysis_embedding`, and show `nearest_reels` next to the results with the label "looks similar to your own reel (estimate)".
 4. **Viewer card / own-reel import**: when the Instagram import downloads a reel, call `embed_reel` and `save_reel_embedding(user_id, media_id)`; re-check the `ig_reel` column names used by `ig_metrics_lookup`.
-5. **Migrations**: this branch's migration `n4o5p6q7r8s9` has `down_revision = 'm3n4o5p6q7r8'`, like the other hackathon branches' migrations; after merging run `alembic merge heads -m "merge hackathon branches"` and `alembic upgrade head`.
+5. **Migrations**: this branch's migration `s9t0u1v2w3x4` (first written as `n4o5p6q7r8s9`, the same id the Instagram branch used; renumbered at merge) has `down_revision = 'm3n4o5p6q7r8'`, like the other hackathon branches' migrations; after merging the merge revision `t0u1v2w3x4y5` joins them (already done on main) and `alembic upgrade head`.
 6. Decide the licence review for EnCodec (existing baseline code, not used by the new code).

@@ -1,6 +1,6 @@
 """add reel_visual_embedding and analysis_visual_embedding (DINOv2, vector(768))
 
-Revision ID: n4o5p6q7r8s9
+Revision ID: s9t0u1v2w3x4
 Revises: m3n4o5p6q7r8
 Create Date: 2026-11-04
 
@@ -8,7 +8,8 @@ New tables only (hackathon, DINOv2 integration). No foreign keys into the ig_* t
 by the media id string at query time. No ANN index: the nearest-reel query filters by user_id first (tens to hundreds of
 rows), where an exact scan is faster and exact; add HNSW if a user ever has tens of thousands of reels.
 
-MERGING BRANCHES: this migration branches from m3n4o5p6q7r8 like the other hackathon branches do, so after merging
+RENUMBERED when merging: this file was n4o5p6q7r8s9, the same id the Instagram migration uses, so it was given a new id (never applied
+anywhere before the merge). MERGING BRANCHES: this migration branches from m3n4o5p6q7r8 like the other hackathon branches do, so after merging
 them run `alembic merge heads -m "merge hackathon branches"` and then `alembic upgrade head`.
 """
 import sqlalchemy as sa
@@ -16,7 +17,7 @@ from alembic import op
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects import postgresql
 
-revision = 'n4o5p6q7r8s9'
+revision = 's9t0u1v2w3x4'
 down_revision = 'm3n4o5p6q7r8'
 branch_labels = None
 depends_on = None
