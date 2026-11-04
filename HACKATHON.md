@@ -203,8 +203,25 @@ A verified, post-ready vertical edit of an **uploaded** video (never for pasted 
 
 1. Cloudflare dashboard -> R2 -> Create bucket (e.g. `prysm-auto-edit`), location automatic. Keep it **private** (no public access).
 2. R2 -> Manage API tokens -> Create token with **Object Read & Write** limited to that bucket. Note the Access Key ID, Secret Access Key and the S3 endpoint `https://<account-id>.r2.cloudflarestorage.com`.
-3. Set on the backend host: `AUTO_EDIT_STORAGE=s3`, `R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, plus `AUTO_EDIT_ENABLED=1`. Never commit these values.
+3. Set on the backend host: `AUTO_EDIT_STORAGE=s3`, `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (the same names as the deployment checklist; `R2_ENDPOINT` and `R2_BUCKET` still work as overrides), plus `AUTO_EDIT_ENABLED=1`. Never commit these values.
 4. Optional lifecycle rule on the bucket: delete objects under `uploads/` and `edits/` after 7 days (the app also sweeps files older than `AUTO_EDIT_RETENTION_DAYS`, default 7, each time an edit starts).
 5. Check: start an edit from an uploaded analysis; the objects `uploads/<user>/<analysis>/original.mp4` and `edits/<analysis>/final.mp4` appear in the bucket; `DELETE /prysm/auto-edit/<analysis>` removes them.
 6. The host image needs FFmpeg with libass (the distro `ffmpeg` package has it) and the Python packages in `requirements-studio.txt`.
 
+## Auto-edit and DINOv2: what they do and where they fall short
+
+**Auto-edit** (off unless `AUTO_EDIT_ENABLED=1`; uploads only, never pasted links). Muse Spark turns Prysm's fix steps into an edit list; FFmpeg renders it from the original (cuts on real pauses, captions, zoom punches, loudness, optional music ducking and sound effects); each group of changes is checked by measurements, an AI re-score and a Muse Wonder critic that watches before and after, and is reverted if it does not help. The creator can toggle changes, pick a preset, type a request and download the MP4, captions and edit list. A real edit took roughly 1 to 2 minutes and cost about $0.10 to $0.30.
+
+**DINOv2** (existing Meta model, new integration; Modal GPU). Embeds Instagram reels and analysed videos, so a new video can be shown next to the most similar reel the creator has (with that reel's real numbers), and it draws an attention strip: visual change, audio energy and change, static stretches and quiet dips.
+
+Known limits, stated plainly:
+
+* **Captions on sung or noisy-lyric videos are wrong or missing.** The speech recogniser cannot transcribe a song. The critic usually catches it and reverts the captions (4 of 6 test videos), so those videos get no captions rather than bad ones.
+* **No cut-off-face detection.** The DINOv2 render check does not notice a cropped face and cannot catch a wrong segment in a repetitive scene; it is also only calibrated on three before/after pairs, and it is a stub that is switched off (`DINO_EDIT_RENDER_CHECK`).
+* **Everything DINOv2 shows is an estimate.** "Looks similar" is about pictures, not about results. The attention strip has no percentages and no predictions. The planner-hints stub (`DINO_PLANNER_HINTS`) is also off, so the picture signals do not yet steer the edit.
+* **The critic is one model's opinion**, and the AI re-score is labelled "AI-estimated". Cuts that remove speech are marked risky and can be toggled back.
+* **Filler words** ("um") are rarely removed: the recogniser does not write them. Pause tightening is what fires on real footage.
+* **Music ducking needs Modal.** A landscape source is shown over a blurred copy of itself (no smart reframing).
+* On the Railway container (no GPU) the Modal-backed parts depend on Modal being reachable, and edited videos need R2 (`AUTO_EDIT_STORAGE=s3`) to survive a redeploy.
+
+Details and numbers: `docs/auto-edit.md`, `docs/auto-edit-progress.md`, `docs/dinov2.md`, `docs/dino-wire.md`.

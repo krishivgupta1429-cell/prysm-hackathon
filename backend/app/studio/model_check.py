@@ -68,8 +68,15 @@ def configured_models() -> dict[str, tuple[str, str]]:
 
 def evidence_models() -> dict[str, str]:
     """The other models the analysis can use. They fail soft (the analysis carries on without them), so they only get a warning."""
-    return {"spark audio listener": config.SPARK_AUDIO_MODEL, "caption model": config.CAPTION_MODEL,
-            "voice transcribe": config.VOICE_TRANSCRIBE_MODEL, "SAM subjects": config.SAM_MODEL}
+    out = {"spark audio listener": config.SPARK_AUDIO_MODEL, "caption model": config.CAPTION_MODEL,
+           "voice transcribe": config.VOICE_TRANSCRIBE_MODEL, "SAM subjects": config.SAM_MODEL}
+    try:
+        from app.studio.autoedit import config as ae
+        if ae.enabled():   # Auto-edit's two models, only when it is switched on
+            out["auto-edit planner"], out["auto-edit critic"] = ae.planner_model(), ae.critic_model()
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 def _version(model: str):

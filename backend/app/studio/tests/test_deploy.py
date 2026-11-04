@@ -57,7 +57,7 @@ def test_every_missing_or_placeholder_variable_is_named_once_with_no_value():
     for k in ("SECRET_KEY", "JWT_SECRET", "DATABASE_URL", "REDIS_URL", "FRONTEND_URL", "META_API_KEY", "GROQ_API_KEY", "R2_BUCKET_NAME",
               "STUDIO_DAILY_SPEND_CAP_USD", "STUDIO_USER_HOURLY_LIMIT", "STUDIO_USER_DAILY_LIMIT", "TOKEN_ENCRYPTION_KEY"):
         env.pop(k)
-    s, g = build(env)
+    s, g = build(env, AUTO_EDIT_ENABLED="1")   # Auto-edit is off by default; the R2 variables are required once it is on
     bad = names(prod_check.problems(s, g)[0])
     assert {"SECRET_KEY", "JWT_SECRET", "DATABASE_URL", "REDIS_URL", "FRONTEND_URL", "META_API_KEY", "GROQ_API_KEY", "R2_BUCKET_NAME",
             "STUDIO_DAILY_SPEND_CAP_USD", "STUDIO_USER_HOURLY_LIMIT", "STUDIO_USER_DAILY_LIMIT", "TOKEN_ENCRYPTION_KEY"} <= bad
@@ -107,9 +107,9 @@ def test_instagram_needs_a_real_https_callback_when_configured():
 
 def test_nobody_could_verify_an_account_without_auto_verify_or_an_email_key():
     env = good_env(); env.pop("DEMO_AUTO_VERIFY")
-    s, g = build(env)
+    s, g = build(env, AUTO_EDIT_ENABLED="1")
     assert "DEMO_AUTO_VERIFY / BREVO_API_KEY" in names(prod_check.problems(s, g)[0])
-    s, g = build(env, BREVO_API_KEY="k")
+    s, g = build(env, BREVO_API_KEY="k", AUTO_EDIT_ENABLED="0")
     assert prod_check.problems(s, g)[0] == []
 
 
@@ -175,3 +175,37 @@ def test_the_database_bootstrap_has_three_states_and_never_prints_the_url():
     assert all(w in src for w in ("fresh", "versioned", "unversioned"))
     assert "print(settings.DATABASE_URL" not in src and "{settings.DATABASE_URL" not in src
     assert db_bootstrap._async_url("postgresql://u:p@h/db").startswith("postgresql+asyncpg://")
+
+
+def test_auto_edit_defaults_to_off_so_r2_is_not_demanded_by_default():
+    env = good_env()
+    for k in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"):
+        env.pop(k)
+    s, g = build(env)
+    assert s.AUTO_EDIT_ENABLED is False and prod_check.problems(s, g)[0] == []
+
+
+def test_auto_edit_on_warns_when_its_files_would_live_on_the_servers_disk():
+    s, g = build(good_env(), AUTO_EDIT_ENABLED="1")
+    errors, warns = prod_check.problems(s, g)
+    assert errors == [] and any(w.startswith("AUTO_EDIT_STORAGE") for w in warns)
+    s, g = build(good_env(), AUTO_EDIT_ENABLED="1", AUTO_EDIT_STORAGE="s3")
+    assert not any(w.startswith("AUTO_EDIT_STORAGE") for w in prod_check.problems(s, g)[1])
+
+
+def test_auto_edit_s3_storage_accepts_the_checklist_r2_names(monkeypatch):
+    from app.studio.autoedit import config as aec, storage as st
+    env = {"AUTO_EDIT_STORAGE": "s3", "R2_ACCOUNT_ID": "acct123", "R2_BUCKET_NAME": "bkt", "R2_ACCESS_KEY_ID": "k", "R2_SECRET_ACCESS_KEY": "s"}
+    seen = {}
+
+    class Fake:
+        def __init__(self, bucket, endpoint, access_key, secret_key):
+            seen.update(bucket=bucket, endpoint=endpoint)
+    monkeypatch.setattr(aec, "env", lambda name, default=None: env.get(name, default))
+    monkeypatch.setattr(st, "S3Storage", Fake)
+    st.set_storage(None)
+    try:
+        st.get_storage()
+    finally:
+        st.set_storage(None)
+    assert seen == {"bucket": "bkt", "endpoint": "https://acct123.r2.cloudflarestorage.com"}

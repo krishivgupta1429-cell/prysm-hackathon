@@ -70,8 +70,20 @@ There is **no separate queue worker process**. The analysis queue is a Redis lis
 | `META_VISION_MODEL`, `META_SCORING_MODEL`, `META_CHAT_MODEL` | no | default `muse-spark-1.3`; leave unset |
 | `GROQ_API_KEY` | yes | <https://console.groq.com/keys> (speech transcription) |
 | `GEMINI_API_KEY` | recommended | <https://aistudio.google.com/apikey> (audio and trend stages; without it they are skipped, logged as a warning) |
-| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` | yes, unless `AUTO_EDIT_ENABLED=0` | section D |
-| `AUTO_EDIT_ENABLED` | no | default on; `0` runs without edited videos (then no R2 variables are needed) |
+| `AUTO_EDIT_ENABLED` | no | **default off** (`0`). `1` turns on Auto-edit (on-demand edited video for uploads; see section H). The server then also requires the four R2 variables below. |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` | only with `AUTO_EDIT_ENABLED=1` | section D (the start-up check names any that is missing) |
+| `AUTO_EDIT_STORAGE` | with Auto-edit on | `s3` (R2). Default `local` keeps files on the container's disk, which is lost at every redeploy; the start-up check warns. |
+| `AUTO_EDIT_MAX_COST_USD` | no | spend cap of one edit run, default `1.50` (a real edit cost about $0.10 to $0.30) |
+| `AUTO_EDIT_RETENTION_DAYS` | no | days kept in storage, default `7` |
+| `AUTO_EDIT_PLANNER_MODEL`, `AUTO_EDIT_CRITIC_MODEL` | no | defaults `muse-spark-1.3` and `muse-wonder-1.0`; leave unset (both are checked at start-up when Auto-edit is on) |
+| `AUTO_EDIT_PLANNER_EFFORT`, `AUTO_EDIT_CRITIC_EFFORT` | no | reasoning effort, default `low` |
+| `AUTO_EDIT_CRITIC_REQUIRED` | no | default `1`: an unverified group of changes is reverted |
+| `AUTO_EDIT_FONT_DIR`, `AUTO_EDIT_STORAGE_DIR`, `AUTO_EDIT_FFMPEG` | no | paths; defaults `/app/data/fonts`, `/app/data/auto_edit` and the container's `ffmpeg`; leave unset |
+| `AUTO_EDIT_LEGACY` | no | leave unset: the baseline's automatic edit after every analysis stays off |
+| `R2_ENDPOINT`, `R2_BUCKET` | no | optional overrides of the endpoint and bucket derived from `R2_ACCOUNT_ID` and `R2_BUCKET_NAME` |
+| `DINO_WIRE` | no | default on; `0` turns off picture matching, "Closest to your Reel N" and the attention strip |
+| `DINO_BACKEND`, `DINO_MODAL_URL`, `DINO_MODAL_TOKEN` | for DINOv2 | `modal` plus the URL printed by `modal deploy` of the DINOv2 app and its token. Unset: the DINOv2 features report "unavailable" and nothing breaks. |
+| `DINO_PLANNER_HINTS`, `DINO_EDIT_RENDER_CHECK` | **leave unset** | stubs that do nothing today |
 | `STUDIO_UNLIMITED` | demo | `1`: no plans, credits or pricing; the cost caps below protect your spend |
 | `DEMO_AUTO_VERIFY` | yes (or `BREVO_API_KEY`) | `1`: new accounts are verified at once. Without it and without an email key nobody can verify an account. |
 | `STUDIO_ALLOW_LINKS` | no | **Default 0 (off) in code**: unset or empty means off, uploads only. Set `1` to turn on "study any reel" (paste a link): it downloads other people's reels through Apify and yt-dlp, so it also needs `APIFY_API_TOKEN` and `VITE_STUDIO_ALLOW_LINKS=1` on Vercel (the website switch is separate and set at build time; set both or neither). See `docs/link-flow-notes.md`. |
@@ -189,3 +201,13 @@ At start-up the backend asks Meta (free `GET /v1/models`) which models the key c
 * A missing plain Muse Spark model is replaced by the newest plain Muse Spark model the key has (never a `-contributor` one). If there is none, every analysis is refused in the first seconds with "We couldn't start the analysis. Please try again in a few minutes." and the log says which variable set the bad model.
 * A step that errors is retried once. The vision step then fails the analysis clearly (no hollow report); optional steps show "(could not run)" instead of "skipped".
 * The check is repeated at the start of each analysis (cached for 5 minutes); it only spends money (about $0.001) when a model is missing from the list and needs confirming.
+
+## H. Auto-edit and DINOv2 in the Railway container (checked on the merged code)
+
+Checked by building `backend/Dockerfile` (Python 3.11.18 on Debian) and running inside it:
+
+* **FFmpeg:** the `ffmpeg` package installed by the Dockerfile is 7.1 with `libass` and `libfreetype`, and has the `ass` (captions) and `drawtext` filters, so no extra system package is needed. Auto-edit picks it up as `/usr/bin/ffmpeg`.
+* **Fonts:** Google Fonts are downloaded at first use (the container needs outbound access to `fonts.googleapis.com`; a real download of "Lobster" worked) into `/app/data/fonts`. The container runs as root, so that path and `/app/data/auto_edit` are writable. Both are **ephemeral**: fonts are simply downloaded again after a redeploy, but retained originals and edited videos are not, which is why `AUTO_EDIT_STORAGE=s3` (R2) is needed. A bundled Poppins is the fallback if a download fails.
+* **No GPU on Railway:** Auto-edit and DINOv2 do not need one in the container. Music ducking (Demucs) and the DINOv2 embeddings run on **Modal** (needs `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`, and for DINOv2 `DINO_MODAL_URL` and `DINO_MODAL_TOKEN`). Without Modal, ducking is skipped and DINOv2 shows "unavailable".
+* **Models:** every Auto-edit model call (planner, critic, speech) goes through `MetaClient` and `META_BASE_URL`, so it follows the relay (`docs/meta-relay.md`) like the rest. It makes no Anthropic call. Its Whisper step uses Groq (`GROQ_API_KEY`, already required).
+* **Database:** the merge adds no migration; there is one Alembic head (`t0u1v2w3x4y5`). A clean database builds and stamps at it.

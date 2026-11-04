@@ -206,14 +206,17 @@ _storage: Storage | None = None
 
 
 def get_storage() -> Storage:
-    """The configured storage (cached): AUTO_EDIT_STORAGE=s3 uses R2_*; anything else is local."""
+    """The configured storage (cached): AUTO_EDIT_STORAGE=s3 uses the R2_* variables; anything else is local disk."""
     global _storage
     if _storage is None:
         if (config.env("AUTO_EDIT_STORAGE", "local") or "local").lower() == "s3":
-            bucket, endpoint = config.env("R2_BUCKET"), config.env("R2_ENDPOINT")
+            # The deployment checklist names the baseline's variables (R2_ACCOUNT_ID, R2_BUCKET_NAME); R2_ENDPOINT / R2_BUCKET still win when set
+            account = config.env("R2_ACCOUNT_ID")
+            bucket = config.env("R2_BUCKET") or config.env("R2_BUCKET_NAME")
+            endpoint = config.env("R2_ENDPOINT") or (f"https://{account}.r2.cloudflarestorage.com" if account else None)
             key, secret = config.env("R2_ACCESS_KEY_ID"), config.env("R2_SECRET_ACCESS_KEY")
             if not (bucket and endpoint and key and secret):
-                raise StorageError("AUTO_EDIT_STORAGE=s3 needs R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY")
+                raise StorageError("AUTO_EDIT_STORAGE=s3 needs R2_ACCOUNT_ID (or R2_ENDPOINT), R2_BUCKET_NAME (or R2_BUCKET), R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY")
             _storage = S3Storage(bucket, endpoint=endpoint, access_key=key, secret_key=secret)
         else:
             _storage = LocalStorage(config.storage_dir())

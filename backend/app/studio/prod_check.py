@@ -90,6 +90,8 @@ def problems(s, getenv: Callable[[str], str | None]) -> tuple[list[str], list[st
         for name in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"):
             if not set_(name):   # explicit even for the bucket name, which has a code default
                 err.append(f"{name}: required while AUTO_EDIT_ENABLED is on (set AUTO_EDIT_ENABLED=0 to run without edited videos)")
+        if (getenv("AUTO_EDIT_STORAGE") or "local").lower() != "s3":
+            warn.append("AUTO_EDIT_STORAGE: not s3, so retained originals and edited videos live on the server's disk and are lost at every redeploy (set AUTO_EDIT_STORAGE=s3)")
 
     # Accounts
     if not s.DEMO_AUTO_VERIFY and not s.BREVO_API_KEY:

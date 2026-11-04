@@ -216,3 +216,17 @@ def test_the_progress_screen_never_calls_an_error_skipped():
     import pathlib
     src = (pathlib.Path(__file__).resolve().parents[4] / "web/src/studio/progress.ts").read_text()
     assert "if (v === 'error') return 'failed'" in src
+
+
+def test_startup_also_checks_the_auto_edit_models_when_auto_edit_is_on(monkeypatch, caplog):
+    env(monkeypatch, AUTO_EDIT_ENABLED="1", AUTO_EDIT_CRITIC_MODEL="muse-wonder-9.9")
+    available(monkeypatch, ALL | {"muse-voice-transcribe-1.0"})
+    with caplog.at_level(logging.INFO, logger="app.studio.model_check"):
+        run(mc.startup_check())
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "auto-edit critic model muse-wonder-9.9" in text and "auto-edit planner" not in text
+    caplog.clear(); mc.reset_for_tests()
+    env(monkeypatch)                                   # auto-edit off: its models are not checked
+    with caplog.at_level(logging.INFO, logger="app.studio.model_check"):
+        run(mc.startup_check())
+    assert "auto-edit" not in "\n".join(r.getMessage() for r in caplog.records)
