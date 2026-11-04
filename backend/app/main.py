@@ -209,6 +209,9 @@ app.include_router(creator.router,      prefix="/creator",      tags=["Creator I
 app.include_router(intelligence.router, prefix="/intelligence", tags=["Intelligence v2"])
 app.include_router(clips.router,        prefix="/clips",        tags=["Clip Generation"])
 app.include_router(prysm.router,       prefix="/prysm",        tags=["Prysm Analysis"])
+if settings.AUTO_EDIT_ENABLED:  # hackathon Auto-edit: the routes do not exist at all while the flag is off
+    from app.studio.autoedit import api as auto_edit_api
+    app.include_router(auto_edit_api.router, prefix="/prysm/auto-edit", tags=["Auto-edit"])
 app.include_router(billing.router,     prefix="/billing",      tags=["Billing"])
 app.include_router(admin.router,       prefix="/admin",         tags=["Admin"])
 from app.studio.instagram.router import router as instagram_router  # hackathon: Instagram connect + Creator DNA

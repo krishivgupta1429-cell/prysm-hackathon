@@ -37,7 +37,8 @@ class Settings(BaseSettings):
     COACH_STYLE: bool = True                   # hackathon: append app/studio/coach_style.md to the two scoring prompts as an addendum (default on; only used with AI_PROVIDER=meta; COACH_STYLE=0 turns it off)
     STEP_REGENERATE: bool = True               # hackathon: regenerate the steps of any parameter that fails the step check (fewer than 3 steps, fallback first, no ready-to-say line); STEP_REGENERATE=0 turns it off
     DEBUG_SAVE_INPUTS: bool = False            # hackathon: save the exact inputs of the scoring calls once per analysis (samples/_local/scoring_inputs) for scripts/rescore.py
-    AUTO_EDIT_ENABLED: bool = True             # the baseline auto-edit + R2 upload step after an analysis; the hackathon env switches it off (AUTO_EDIT_ENABLED=0)
+    AUTO_EDIT_ENABLED: bool = False            # hackathon Auto-edit (docs/auto-edit.md): on-demand, verified edit of an uploaded video. Default off; the baseline's automatic step below only runs when AUTO_EDIT_LEGACY=1
+    AUTO_EDIT_LEGACY: bool = False             # the baseline's automatic edit + R2 upload after every analysis (needs AUTO_EDIT_ENABLED=1 too)
     STUDIO_MAX_CONCURRENT: int = 2             # analyses running at once across all processes (safety net)
     DEMO_AUTO_VERIFY: bool = False             # demo mode: new accounts are verified at once (no email provider needed)
     STUDIO_ALLOW_LINKS: bool = False           # "study any reel" (the baseline link flow, Apify/yt-dlp download). OFF unless set to 1: uploads only

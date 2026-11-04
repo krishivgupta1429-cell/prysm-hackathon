@@ -337,8 +337,9 @@ class MetaClient:
 
     # ------------------------------------------------------------ Groq Whisper
 
-    def whisper(self, wav_path: Path) -> WhisperCall:
-        """whisper-large-v3-turbo, language auto-detected, word + segment timestamps when supported."""
+    def whisper(self, wav_path: Path, prompt: str | None = None) -> WhisperCall:
+        """whisper-large-v3-turbo, language auto-detected, word + segment timestamps when supported. `prompt` (optional, Auto-edit) primes the
+        recogniser, e.g. with filler words, so it keeps disfluencies instead of cleaning them up."""
         if not self.groq_key:
             raise MissingKey("GROQ_API_KEY is not set in backend/.env")
         audio = wav_path.read_bytes()
@@ -348,6 +349,8 @@ class MetaClient:
             data = {"model": config.GROQ_WHISPER_MODEL, "response_format": "verbose_json"}
             if granularities:
                 data["timestamp_granularities[]"] = ["word", "segment"]
+            if prompt:
+                data["prompt"] = prompt
             r = httpx.post(config.GROQ_URL, headers={"Authorization": f"Bearer {self.groq_key}"}, timeout=TIMEOUT,
                            data=data, files={"file": (wav_path.name, audio, "audio/wav")})
             self._check("whisper", r.status_code, r.text)

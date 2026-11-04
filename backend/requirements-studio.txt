@@ -11,3 +11,10 @@ pydantic
 librosa
 numpy
 google-genai
+boto3
+scipy
+soundfile
+opencv-python-headless
+imageio-ffmpeg
+json-repair
+fonttools>=4.50

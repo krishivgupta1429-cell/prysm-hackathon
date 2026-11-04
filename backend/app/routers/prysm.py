@@ -416,6 +416,10 @@ async def _run_analysis_task(
         # ── Auto-edit: apply suggestions to video via FFmpeg, upload to R2 ──
         # Only for uploaded videos (not link analyses — we don't keep downloaded copies)
         if settings.AUTO_EDIT_ENABLED and source_type == "upload" and video_path and os.path.exists(video_path):
+            # Hackathon Auto-edit: keep the creator's original (copied, never modified) before the temp folder is deleted
+            from app.studio.autoedit.api import retain_upload
+            await asyncio.to_thread(retain_upload, str(user_id), str(analysis_id), video_path)
+        if settings.AUTO_EDIT_ENABLED and settings.AUTO_EDIT_LEGACY and source_type == "upload" and video_path and os.path.exists(video_path):
             try:
                 from app.services.auto_edit_service import build_edit_plan, render_edited_video, get_video_duration
                 from app.services.r2_service import upload_video as r2_upload
