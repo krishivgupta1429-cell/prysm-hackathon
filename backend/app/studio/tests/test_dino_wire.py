@@ -411,3 +411,12 @@ async def test_disconnect_deletes_the_picture_embeddings():
         async with factory() as db:
             counts = await oauth.disconnect(db, uid)
         assert counts["picture_embeddings"] == 1 and await stored(factory, uid) == []
+
+
+def test_the_closest_reels_thumbnail_follows_the_creator_dna_rules():
+    import types
+    from app.studio.dino import wire
+    fixture, real = types.SimpleNamespace(is_fixture=True), types.SimpleNamespace(is_fixture=False)
+    assert wire._thumb(fixture, "fixture://thumb/3") == "/instagram/fixture-thumb/3"
+    assert wire._thumb(real, "fixture://thumb/3") is None
+    assert wire._thumb(real, "https://cdn.example/t.jpg") == "https://cdn.example/t.jpg" and wire._thumb(real, None) is None

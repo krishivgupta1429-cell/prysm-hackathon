@@ -216,6 +216,13 @@ def _plain_lines(r: dict) -> list[str]:
     return lines
 
 
+def _thumb(acct, url):
+    """The reel's thumbnail as the Creator DNA page serves it: a fixture's own generated image, else Instagram's link (it may have expired)."""
+    if url and url.startswith("fixture://thumb/"):
+        return f"/instagram/fixture-thumb/{url.rsplit('/', 1)[1]}" if getattr(acct, "is_fixture", False) else None
+    return url or None
+
+
 async def closest_payload(db, user_id, analysis_id, personalise_load=None) -> dict:
     """What the results page shows under "Closest to your Reel N". Reels are numbered like the Creator DNA (newest = Reel 1)."""
     from sqlalchemy import select
@@ -245,6 +252,7 @@ async def closest_payload(db, user_id, analysis_id, personalise_load=None) -> di
             continue   # an embedding of a reel that is no longer imported
         ranked.append({"n": r["n"], "similarity": item["similarity"], "band": similarity_band(item["similarity"]), "permalink": r.get("permalink"),
                        "postedAt": r["posted_at"].isoformat() if r.get("posted_at") else None, "partial": bool(r.get("partial")),
+                       "thumbnailUrl": _thumb(data["account"], r.get("thumbnail_url")),
                        "lines": _plain_lines(r), "hookWords": r.get("hook_words") if r.get("hook_words_status") == "transcribed" else None})
     missing = len(reels) - len(ranked)
     out = {**base, "connected": True, "isFixture": bool(data["account"].is_fixture), "own_reels": len(reels), "compared_with": len(ranked),

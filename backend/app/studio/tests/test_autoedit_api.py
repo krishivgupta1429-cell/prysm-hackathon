@@ -263,3 +263,34 @@ def test_cost_endpoint_is_hidden_unless_the_founder_or_local_flag(ctx, monkeypat
     assert ctx.client.get(f"/prysm/auto-edit/{ctx.aid}/cost").status_code == 404
     monkeypatch.setattr("app.studio.cost_access.cost_visible", lambda email: True)
     assert ctx.client.get(f"/prysm/auto-edit/{ctx.aid}/cost").status_code == 200
+
+
+# ---- exact timestamps on each change, and the clean cut (hackathon)
+
+def test_status_gives_each_change_its_exact_timestamps(ctx):
+    finished_state(ctx)
+    s = ctx.client.get(f"/prysm/auto-edit/{ctx.aid}/status").json()["state"]
+    zoom = next(c for c in s["changes"] if c["id"] == "o1")
+    assert zoom["params"]["at"] == 2.0 and zoom["params"]["scale"] == 1.1
+
+
+def test_clean_cut_needs_a_finished_edit_then_starts_one_job_and_blocks_other_changes(ctx):
+    st = finished_state(ctx)
+    base = f"/prysm/auto-edit/{ctx.aid}"
+    assert ctx.client.post(f"{base}/clean-cut").status_code == 409            # no final render yet
+    st["final"] = {"metrics": {}}
+    ctx.store.put_bytes(O.state_key(ctx.aid), json.dumps(st).encode())
+    r = ctx.client.post(f"{base}/clean-cut")
+    assert r.status_code == 200 and len(ctx.spawned) == 1 and r.json()["clean_cut"] == {"running": True}
+    assert ctx.client.post(f"{base}/toggle", json={"op_id": "o1", "enabled": False}).status_code == 409   # busy while it renders
+
+
+def test_a_clean_cut_keeps_only_safe_pauses_and_loudness():
+    from app.studio.autoedit.edl import EDL, Op
+    ops = [Op(id="auto_silence1", type="cut_segment", group="pacing", reason="r", params={"start": 1.0, "end": 2.0}),
+           Op(id="auto_hesitation1", type="cut_segment", group="pacing", reason="r", params={"start": 3.0, "end": 3.4}),
+           Op(id="auto_loud", type="loudnorm", group="audio", reason="r", params={"target_lufs": -14}),
+           Op(id="mz1", type="zoom_punch", group="zoom", reason="r", params={"at": 2.0, "scale": 1.1}),
+           Op(id="caps", type="caption_burn", group="text", reason="r", params={}),
+           Op(id="off_silence", type="cut_segment", group="pacing", reason="r", enabled=False, params={"start": 5.0, "end": 6.0})]
+    assert O.clean_cut_ids(EDL(ops=ops)) == {"auto_silence1", "auto_loud"}

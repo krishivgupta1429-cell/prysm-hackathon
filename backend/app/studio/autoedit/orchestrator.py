@@ -634,6 +634,37 @@ class Runner:
         self.save()
 
     # ------------------------------------------------------------------ toggles / presets / revisions
+    def clean_cut(self):
+        """Render the same edit with only the safe pause and loudness ops (see clean_cut_ids) to clean.mp4. No model call; `final` is untouched."""
+        st = self.state
+        cc = st.setdefault("clean_cut", {})
+        try:
+            cc.update(running=True, error=None)
+            self.phase("rendering", "making the clean cut: pauses and loudness only")
+            self.load_inputs()
+            self.load_faces()
+            self._resolve_fonts(EDL.model_validate(st["edl"]) if st.get("edl") else None)
+            edl = self.edl()
+            keep = clean_cut_ids(edl)
+            for o in edl.ops:
+                o.enabled = o.id in keep
+            if not keep:
+                cc.update(running=False, ready=False, error="There was no pause or loudness fix to keep, so a clean cut would be the same as your original.")
+                return st
+            groups = {o.group for o in edl.ops if o.enabled}
+            path, _rr, _key = self.render_set(edl, groups, "clean")
+            self.storage.put_file(edit_prefix(self.aid) + "clean.mp4", path, "video/mp4")
+            cc.update(running=False, ready=True, ops=len(keep), error=None)
+            self.event("info", f"clean cut made: {len(keep)} safe fixes, no overlays")
+        except Exception as e:
+            log.exception("[AutoEdit] clean cut failed")
+            cc.update(running=False, ready=False, error=f"{type(e).__name__}: {str(e)[:200]}")
+        finally:
+            cc["running"] = False
+            self.save()
+            self.close()
+        return st
+
     def rerender(self, summary: str, ai_verified: bool = False):
         """Re-render the current EDL (ops' enabled flags + style) and run the objective checks (no AI scoring)."""
         st = self.state
@@ -677,6 +708,11 @@ class Runner:
 
 
 # ------------------------------------------------------------------ helpers
+
+def clean_cut_ids(edl: EDL) -> set[str]:
+    """The ops a "clean cut" keeps: the safe pause tightening and the loudness fix, nothing that draws on the picture or adds sound."""
+    return {o.id for o in edl.ops if o.enabled and ((o.type == "cut_segment" and o.id.startswith("auto_silence")) or o.type == "loudnorm")}
+
 
 def _frange(a: float, b: float, step: float):
     t = a

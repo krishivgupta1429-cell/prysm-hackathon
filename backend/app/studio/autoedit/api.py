@@ -39,7 +39,7 @@ _LIVE: dict[str, dict] = {}          # analysis_id -> the state of an edit runni
 _TASKS: set = set()                  # keeps background tasks alive
 LOCK_TTL_S = 1800
 DOWNLOADS = {"mp4": ("final.mp4", "video/mp4", "mp4"), "srt": ("captions.srt", "text/plain", "srt"), "ass": ("captions.ass", "text/plain", "ass"),
-             "edl": ("edl.json", "application/json", "json"), "cover": ("cover.jpg", "image/jpeg", "jpg")}
+             "edl": ("edl.json", "application/json", "json"), "cover": ("cover.jpg", "image/jpeg", "jpg"), "clean": ("clean.mp4", "video/mp4", "mp4")}
 
 
 # ------------------------------------------------------------------ helpers
@@ -122,6 +122,7 @@ def public_state(st: dict) -> dict:
         verdict = g.get("status", "pending")
         op_rev = (out.get("op_reverts") or {}).get(o["id"])
         changes.append({"id": o["id"], "type": o["type"], "group": o["group"], "label": label, "reason": o.get("reason", ""),
+                        "params": {k: v for k, v in (o.get("params") or {}).items() if k in ("start", "end", "at", "role", "text", "anchor", "word", "scale", "target_lufs", "effect", "kind")},
                         "target_parameter": o.get("target_parameter", ""), "source_step_id": o.get("source_step_id"), "enabled": o["enabled"],
                         "verdict": "reverted" if op_rev else verdict, "verdict_reasons": [op_rev] if op_rev else g.get("reasons", []), "user_override": o["id"] in overrides, "finding": o.get("finding", ""),
                         "effect_options": (_sfx.MOMENT_EFFECTS.get(o["params"].get("kind"), []) if o["type"] == "sfx_hit" else []),
@@ -190,6 +191,8 @@ async def _job(kind: str, st: dict, analysis: dict, user_id: str, **kw) -> None:
     try:
         if kind == "run":
             await asyncio.to_thread(runner.run)
+        elif kind == "clean":
+            await asyncio.to_thread(runner.clean_cut)
         else:
             await asyncio.to_thread(runner.rerender, kw.get("summary", "changes"))
     except Exception as e:  # the runner reports its own failures; this is the last line of defence
@@ -214,7 +217,7 @@ async def _owned_state(analysis_id: str, user: User, db: AsyncSession) -> tuple[
 
 
 def _need_idle(st: dict) -> None:
-    if st.get("status") in ("queued", "running"):
+    if st.get("status") in ("queued", "running") or (st.get("clean_cut") or {}).get("running"):
         raise HTTPException(status_code=409, detail="An edit is still running; wait for it to finish.")
 
 
@@ -304,6 +307,22 @@ async def start(analysis_id: str, body: StartBody, current_user: User = Depends(
     except Exception:
         await _release_user(uid)
         raise
+    return public_state(st)
+
+
+@router.post("/{analysis_id}/clean-cut")
+async def clean_cut(analysis_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """A second render of the same edit with ONLY the safe pause and loudness fixes (no captions, zoom, labels, hook text or sound accents),
+    for finishing in another editor. No model call; the main edit and its files are not touched."""
+    rec, st = await _owned_state(analysis_id, current_user, db)
+    _need_idle(st)
+    if not st.get("edl") or not st.get("final"):
+        raise HTTPException(status_code=409, detail="Make the edit first.")
+    uid = _uid(current_user.id)
+    if not await _acquire_user(uid):
+        raise HTTPException(status_code=409, detail="You already have an edit running.")
+    st["clean_cut"] = {"running": True}
+    _spawn(_job("clean", st, dict(rec.raw_result or {}), uid))
     return public_state(st)
 
 
@@ -473,7 +492,7 @@ async def download(analysis_id: str, kind: str, current_user: User = Depends(get
             raise HTTPException(status_code=404, detail="No auto-edit for this analysis.")
         fname, ctype, ext = DOWNLOADS[kind]
         key = edit_prefix(analysis_id) + fname
-        name = f"prysm-edit-{analysis_id[:8]}.{ext}"
+        name = f"prysm-{'clean-cut' if kind == 'clean' else 'edit'}-{analysis_id[:8]}.{ext}"
     else:
         raise HTTPException(status_code=404, detail="Unknown download.")
     if not store.exists(key):
