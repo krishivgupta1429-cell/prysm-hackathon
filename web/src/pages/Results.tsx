@@ -12,13 +12,14 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { STUDIO_MODE } from '@/lib/config'
 import CostPanel from '@/studio/CostPanel'
-import AutoEdit from '@/studio/AutoEdit'
+import AutoEditCard from '@/studio/AutoEditCard'
 import { parseMarkedSteps } from '@/studio/steps'
 import ViewerBehaviourCard from '@/studio/ViewerBehaviourCard'
 import AdaptCard, { type AdaptBlock } from '@/studio/AdaptCard'
 import { CreatorDnaCard, PersonalisedTag, type CreatorDnaBlock } from '@/studio/CreatorDnaCard'
 import ClosestReel from '@/studio/ClosestReel'
 import type { ViewerAttention } from '@/studio/AttentionStrip'
+import { quietWindows } from '@/lib/quietWindows'
 
 interface Parameter {
   name: string
@@ -379,11 +380,12 @@ function VideoPlayer({ videoUrl, frames, hookMoment, firstFrameB64 }: {
 
 /* ── Audio Energy Curve ─────────────────────────────────────────────── */
 
-function AudioEnergyCurve({ energy }: { energy: EnergyCurve }) {
+function AudioEnergyCurve({ energy, attention }: { energy: EnergyCurve; attention?: ViewerAttention | null }) {
   if (!energy?.curve?.length) return null
   const pts = energy.curve
   const duration = energy.duration || pts[pts.length - 1]?.t || 1
-  const low = energy.low_energy_segments || []
+  // the same quiet windows the Viewer behaviour strip shows (lib/quietWindows): one source, so the two can never disagree
+  const low = quietWindows(attention, energy.low_energy_segments).wins
 
   // Build SVG path from energy points
   const W = 300
@@ -405,9 +407,9 @@ function AudioEnergyCurve({ energy }: { energy: EnergyCurve }) {
     <div className="shrink-0 border border-border rounded-xl p-3.5 bg-background">
       <div className="flex items-center justify-between mb-2.5">
         <p className="text-[10px] font-semibold tracking-widest uppercase text-foreground/30">Audio Energy</p>
-        {energy.drop_detected && (
+        {low.length > 0 && (
           <span className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded border border-red-200/50 bg-red-50/40 text-red-600/70">
-            Drop at {energy.drop_at_seconds}s
+            Drop at {low[0].start}s
           </span>
         )}
       </div>
@@ -475,7 +477,7 @@ function AudioEnergyCurve({ energy }: { energy: EnergyCurve }) {
         <div className="mt-2.5 flex flex-col gap-1">
           {low.slice(0, 2).map((seg, i) => (
             <p key={i} className="text-[10px] text-red-600/60 font-body">
-              ↓ Low energy {seg.start}s–{seg.end}s — viewer drop-off risk
+              ↓ Quiet {seg.start}s–{seg.end}s — viewers may drop off (estimate)
             </p>
           ))}
         </div>
@@ -744,7 +746,7 @@ export default function Results({ injected }: { injected?: Record<string, unknow
               {/* Audio Energy Curve — Pro+ */}
               {result.energyCurve?.curve?.length ? (
                 canSeeAudioCurve ? (
-                  <AudioEnergyCurve energy={result.energyCurve} />
+                  <AudioEnergyCurve energy={result.energyCurve} attention={result.viewerAttention} />
                 ) : (
                   <div className="shrink-0 border border-border rounded-xl p-4 bg-background relative overflow-hidden">
                     <div className="flex items-center justify-between mb-3">
@@ -801,7 +803,7 @@ export default function Results({ injected }: { injected?: Record<string, unknow
           <div className="flex-1 min-w-0">
 
             {/* ═══ SCORE CARD ═══ */}
-            <div className="border border-border rounded-2xl p-4 sm:p-6 mb-5 overflow-visible"
+            <div className="border border-border rounded-2xl p-4 sm:p-5 mb-4 overflow-visible"
               style={{ opacity: 0, animation: 'fade-slide-in 0.6s ease-out forwards' }}>
               <div className="flex flex-col sm:flex-row items-center sm:items-center gap-3 sm:gap-6 mb-5">
                 <div className="relative shrink-0" style={{ width: 90, height: 90 }}>
@@ -868,13 +870,6 @@ export default function Results({ injected }: { injected?: Record<string, unknow
               </div>
 
               {/* Post readiness for uploads */}
-              {isUpload && weakParams.length > 0 && (
-                <div className="bg-amber-50/30 border border-amber-200/30 rounded-xl p-3 mb-4">
-                  <p className="text-[14px] text-amber-700/60 font-body text-center">
-                    {weakParams.length} fix{weakParams.length !== 1 ? 'es' : ''} before this is ready to post
-                  </p>
-                </div>
-              )}
               {isUpload && weakParams.length === 0 && (
                 <div className="bg-green-50/30 border border-green-200/30 rounded-xl p-3 mb-4">
                   <p className="text-[14px] text-green-700/60 font-body text-center">
@@ -893,7 +888,7 @@ export default function Results({ injected }: { injected?: Record<string, unknow
             </div>
 
             {/* ═══ PARAMETER BARS ═══ */}
-            <div className="border border-border rounded-2xl p-5 sm:p-6 mb-5"
+            <div className="border border-border rounded-2xl p-4 sm:p-5 mb-4"
               style={{ opacity: 0, animation: 'fade-slide-in 0.6s ease-out 100ms forwards' }}>
               <h2 className="font-display text-base font-bold tracking-tight mb-0.5">{paramCount}-Parameter {isCompetitor ? 'Analysis' : 'Breakdown'}</h2>
               <p className="text-foreground/30 text-[12px] mb-4 font-body">{isCompetitor ? 'How well this video executes each signal — high scores = techniques worth learning' : `Based on ${result.platform}'s actual ranking signals`}</p>
@@ -987,119 +982,6 @@ export default function Results({ injected }: { injected?: Record<string, unknow
                 )}
               </div>
             </div>
-
-            {/* ═══ COST BREAKDOWN (local flag or founder only; renders nothing otherwise) ═══ */}
-            <CostPanel analysisId={result.analysis_id} />
-
-            {/* ═══ AUTO-EDIT (hackathon; renders nothing unless the backend flag is on and the analysis came from an upload) ═══ */}
-            {isUpload && <AutoEdit analysisId={result.analysis_id} />}
-
-            {/* ═══ MODELS USED ═══ */}
-            {result.modelsUsed && result.modelsUsed.length > 0 && (
-              <details className="border border-border rounded-2xl px-5 py-3 mb-5">
-                <summary className="cursor-pointer text-[12px] font-semibold tracking-widest uppercase text-foreground/40 font-body">Models used</summary>
-                <ul className="mt-3 space-y-1.5">
-                  {result.modelsUsed.map(m => (
-                    <li key={m.step} className="flex items-baseline justify-between gap-4 text-[12px] font-body">
-                      <span className="text-foreground/50">{m.step}</span>
-                      <span className="text-foreground/35 text-right">
-                        {m.model}
-                        {m.note ? ` · ${m.note}` : ''}
-                        {m.status === 'unavailable' || m.status === 'error' ? ' · not available for this video' : ''}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            )}
-
-            {/* ═══ Hackathon: Modal-served prediction (evqa / qwen_zero_shot) + Q-Align visual quality signal ═══ */}
-            {canSeePrediction && (!result.engagementPrediction || !result.engagementPrediction.source || result.engagementPrediction.source === 'evqa' || result.engagementPrediction.source === 'qwen_zero_shot') && (
-              <ViewerBehaviourCard ep={result.engagementPrediction} attention={result.viewerAttention} />
-            )}
-
-            {/* ═══ Hackathon: how this video compares with the creator's own imported reels ═══ */}
-            {result.creatorDna?.personalised
-              ? <CreatorDnaCard block={result.creatorDna} extra={<ClosestReel analysisId={result.analysis_id} embedded />} />
-              : <ClosestReel analysisId={result.analysis_id} />}
-
-            {/* ═══ ENGAGEMENT PREDICTION (RunPod AI) — Creator+ ═══ */}
-            {result.engagementPrediction && result.engagementPrediction.source === 'runpod' && result.engagementPrediction.ecr != null && result.engagementPrediction.nawp != null && (
-              canSeePrediction ? (() => {
-                const ep = result.engagementPrediction!
-                const ecrRiskColor = ep.hook_risk === 'low' ? 'text-green-600' : ep.hook_risk === 'medium' ? 'text-amber-500' : 'text-red-500'
-                const nawpRiskColor = ep.retention_risk === 'low' ? 'text-green-600' : ep.retention_risk === 'medium' ? 'text-amber-500' : 'text-red-500'
-                const ecrBar = ep.hook_risk === 'low' ? 'bg-green-500' : ep.hook_risk === 'medium' ? 'bg-amber-400' : 'bg-red-500'
-                const nawpBar = ep.retention_risk === 'low' ? 'bg-green-500' : ep.retention_risk === 'medium' ? 'bg-amber-400' : 'bg-red-500'
-                return (
-                  <div className="border border-border rounded-2xl p-5 sm:p-6 mb-5"
-                    style={{ opacity: 0, animation: 'fade-slide-in 0.6s ease-out 150ms forwards' }}>
-                    <div className="flex items-center justify-between mb-1">
-                      <h2 className="font-display text-base font-bold tracking-tight">Predicted Viewer Behaviour</h2>
-                      <span className="text-[9px] font-bold tracking-widest uppercase px-2 py-0.5 rounded-full border border-border text-foreground/30">AI Prediction</span>
-                    </div>
-                    <p className="text-foreground/30 text-[12px] mb-4 font-body">Prysm AI estimates from your video frames — not measured data, but a strong signal of how viewers will respond</p>
-                    <div className="flex flex-col gap-4">
-                      <div>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <span className="text-[13px] font-body text-foreground/60">Hook Hold Rate</span>
-                          <div className="flex items-center gap-2">
-                            <span className={`text-[15px] font-display font-black ${ecrRiskColor}`}>{Math.round(ep.ecr)}%</span>
-                            <span className={`text-[9px] font-bold tracking-widest uppercase px-2 py-0.5 rounded-full border ${ep.hook_risk === 'low' ? 'bg-green-50 text-green-600 border-green-200' : ep.hook_risk === 'medium' ? 'bg-amber-50 text-amber-500 border-amber-200' : 'bg-red-50 text-red-500 border-red-200'}`}>{ep.hook_risk === 'low' ? 'strong hook' : ep.hook_risk === 'medium' ? 'average hook' : 'weak hook'}</span>
-                          </div>
-                        </div>
-                        <div className="h-2 bg-foreground/[0.04] rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full ${ecrBar}`} style={{ width: `${ep.ecr}%`, transition: 'width 1s ease-out 400ms' }} />
-                        </div>
-                        <p className="text-[11px] text-foreground/30 font-body mt-1">% of viewers predicted to watch past the first 5 seconds</p>
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <span className="text-[13px] font-body text-foreground/60">Average Watch Rate</span>
-                          <div className="flex items-center gap-2">
-                            <span className={`text-[15px] font-display font-black ${nawpRiskColor}`}>{Math.round(ep.nawp)}%</span>
-                            <span className={`text-[9px] font-bold tracking-widest uppercase px-2 py-0.5 rounded-full border ${ep.retention_risk === 'low' ? 'bg-green-50 text-green-600 border-green-200' : ep.retention_risk === 'medium' ? 'bg-amber-50 text-amber-500 border-amber-200' : 'bg-red-50 text-red-500 border-red-200'}`}>{ep.retention_risk === 'low' ? 'high retention' : ep.retention_risk === 'medium' ? 'average retention' : 'low retention'}</span>
-                          </div>
-                        </div>
-                        <div className="h-2 bg-foreground/[0.04] rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full ${nawpBar}`} style={{ width: `${ep.nawp}%`, transition: 'width 1s ease-out 500ms' }} />
-                        </div>
-                        <p className="text-[11px] text-foreground/30 font-body mt-1">% of the video the average viewer is predicted to watch</p>
-                      </div>
-                    </div>
-                  </div>
-                )
-              })() : (
-                <div className="border border-border rounded-2xl p-5 sm:p-6 mb-5 relative overflow-hidden"
-                  style={{ opacity: 0, animation: 'fade-slide-in 0.6s ease-out 150ms forwards' }}>
-                  <div className="flex items-center justify-between mb-1">
-                    <h2 className="font-display text-base font-bold tracking-tight">Predicted Viewer Behaviour</h2>
-                    <Lock className="w-4 h-4 text-foreground/20" />
-                  </div>
-                  <p className="text-foreground/30 text-[12px] mb-5 font-body">Hook Hold Rate + Average Watch Rate — powered by AI</p>
-                  <div className="flex flex-col gap-4 pointer-events-none select-none">
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-[13px] font-body text-foreground/30">Hook Hold Rate</span>
-                        <div className="w-10 h-4 rounded-md bg-foreground/[0.06]" />
-                      </div>
-                      <div className="h-2 bg-foreground/[0.06] rounded-full" />
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-[13px] font-body text-foreground/30">Average Watch Rate</span>
-                        <div className="w-10 h-4 rounded-md bg-foreground/[0.06]" />
-                      </div>
-                      <div className="h-2 bg-foreground/[0.06] rounded-full" />
-                    </div>
-                  </div>
-                  <div className="mt-5 flex items-center justify-between">
-                    <p className="text-[11px] text-foreground/30 font-body">Available on Pro plan</p>
-                    <a href="/pricing" className="text-[12px] font-semibold text-foreground/50 hover:text-foreground transition-colors font-body">Upgrade →</a>
-                  </div>
-                </div>
-              )
-            )}
 
             {/* ═══ FIX THIS FIRST / WHAT MADE THIS WORK ═══ */}
             {(isCompetitor ? scoredParams.length > 0 : weakParams.length > 0) && (() => {
@@ -1414,6 +1296,255 @@ export default function Results({ injected }: { injected?: Record<string, unknow
               )
             })()}
 
+            {/* ═══ Hackathon: Modal-served prediction (evqa / qwen_zero_shot) + Q-Align visual quality signal ═══ */}
+            {canSeePrediction && (!result.engagementPrediction || !result.engagementPrediction.source || result.engagementPrediction.source === 'evqa' || result.engagementPrediction.source === 'qwen_zero_shot') && (
+              <ViewerBehaviourCard ep={result.engagementPrediction} attention={result.viewerAttention} />
+            )}
+
+            {/* ═══ Hackathon: how this video compares with the creator's own imported reels ═══ */}
+            {result.creatorDna?.personalised
+              ? <CreatorDnaCard block={result.creatorDna} extra={<ClosestReel analysisId={result.analysis_id} embedded />} />
+              : <ClosestReel analysisId={result.analysis_id} />}
+
+            {/* ═══ ENGAGEMENT PREDICTION (RunPod AI) — Creator+ ═══ */}
+            {result.engagementPrediction && result.engagementPrediction.source === 'runpod' && result.engagementPrediction.ecr != null && result.engagementPrediction.nawp != null && (
+              canSeePrediction ? (() => {
+                const ep = result.engagementPrediction!
+                const ecrRiskColor = ep.hook_risk === 'low' ? 'text-green-600' : ep.hook_risk === 'medium' ? 'text-amber-500' : 'text-red-500'
+                const nawpRiskColor = ep.retention_risk === 'low' ? 'text-green-600' : ep.retention_risk === 'medium' ? 'text-amber-500' : 'text-red-500'
+                const ecrBar = ep.hook_risk === 'low' ? 'bg-green-500' : ep.hook_risk === 'medium' ? 'bg-amber-400' : 'bg-red-500'
+                const nawpBar = ep.retention_risk === 'low' ? 'bg-green-500' : ep.retention_risk === 'medium' ? 'bg-amber-400' : 'bg-red-500'
+                return (
+                  <div className="border border-border rounded-2xl p-4 sm:p-5 mb-4"
+                    style={{ opacity: 0, animation: 'fade-slide-in 0.6s ease-out 150ms forwards' }}>
+                    <div className="flex items-center justify-between mb-1">
+                      <h2 className="font-display text-base font-bold tracking-tight">Predicted Viewer Behaviour</h2>
+                      <span className="text-[9px] font-bold tracking-widest uppercase px-2 py-0.5 rounded-full border border-border text-foreground/30">AI Prediction</span>
+                    </div>
+                    <p className="text-foreground/30 text-[12px] mb-4 font-body">Prysm AI estimates from your video frames — not measured data, but a strong signal of how viewers will respond</p>
+                    <div className="flex flex-col gap-4">
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-[13px] font-body text-foreground/60">Hook Hold Rate</span>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[15px] font-display font-black ${ecrRiskColor}`}>{Math.round(ep.ecr)}%</span>
+                            <span className={`text-[9px] font-bold tracking-widest uppercase px-2 py-0.5 rounded-full border ${ep.hook_risk === 'low' ? 'bg-green-50 text-green-600 border-green-200' : ep.hook_risk === 'medium' ? 'bg-amber-50 text-amber-500 border-amber-200' : 'bg-red-50 text-red-500 border-red-200'}`}>{ep.hook_risk === 'low' ? 'strong hook' : ep.hook_risk === 'medium' ? 'average hook' : 'weak hook'}</span>
+                          </div>
+                        </div>
+                        <div className="h-2 bg-foreground/[0.04] rounded-full overflow-hidden">
+                          <div className={`h-full rounded-full ${ecrBar}`} style={{ width: `${ep.ecr}%`, transition: 'width 1s ease-out 400ms' }} />
+                        </div>
+                        <p className="text-[11px] text-foreground/30 font-body mt-1">% of viewers predicted to watch past the first 5 seconds</p>
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-[13px] font-body text-foreground/60">Average Watch Rate</span>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[15px] font-display font-black ${nawpRiskColor}`}>{Math.round(ep.nawp)}%</span>
+                            <span className={`text-[9px] font-bold tracking-widest uppercase px-2 py-0.5 rounded-full border ${ep.retention_risk === 'low' ? 'bg-green-50 text-green-600 border-green-200' : ep.retention_risk === 'medium' ? 'bg-amber-50 text-amber-500 border-amber-200' : 'bg-red-50 text-red-500 border-red-200'}`}>{ep.retention_risk === 'low' ? 'high retention' : ep.retention_risk === 'medium' ? 'average retention' : 'low retention'}</span>
+                          </div>
+                        </div>
+                        <div className="h-2 bg-foreground/[0.04] rounded-full overflow-hidden">
+                          <div className={`h-full rounded-full ${nawpBar}`} style={{ width: `${ep.nawp}%`, transition: 'width 1s ease-out 500ms' }} />
+                        </div>
+                        <p className="text-[11px] text-foreground/30 font-body mt-1">% of the video the average viewer is predicted to watch</p>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })() : (
+                <div className="border border-border rounded-2xl p-4 sm:p-5 mb-4 relative overflow-hidden"
+                  style={{ opacity: 0, animation: 'fade-slide-in 0.6s ease-out 150ms forwards' }}>
+                  <div className="flex items-center justify-between mb-1">
+                    <h2 className="font-display text-base font-bold tracking-tight">Predicted Viewer Behaviour</h2>
+                    <Lock className="w-4 h-4 text-foreground/20" />
+                  </div>
+                  <p className="text-foreground/30 text-[12px] mb-5 font-body">Hook Hold Rate + Average Watch Rate — powered by AI</p>
+                  <div className="flex flex-col gap-4 pointer-events-none select-none">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[13px] font-body text-foreground/30">Hook Hold Rate</span>
+                        <div className="w-10 h-4 rounded-md bg-foreground/[0.06]" />
+                      </div>
+                      <div className="h-2 bg-foreground/[0.06] rounded-full" />
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[13px] font-body text-foreground/30">Average Watch Rate</span>
+                        <div className="w-10 h-4 rounded-md bg-foreground/[0.06]" />
+                      </div>
+                      <div className="h-2 bg-foreground/[0.06] rounded-full" />
+                    </div>
+                  </div>
+                  <div className="mt-5 flex items-center justify-between">
+                    <p className="text-[11px] text-foreground/30 font-body">Available on Pro plan</p>
+                    <a href="/pricing" className="text-[12px] font-semibold text-foreground/50 hover:text-foreground transition-colors font-body">Upgrade →</a>
+                  </div>
+                </div>
+              )
+            )}
+
+            {/* ═══ AUTO-EDIT: a compact card; the studio is at /edit/:analysisId (hackathon; renders nothing unless Auto-edit is on and the analysis came from an upload) ═══ */}
+            {isUpload && <AutoEditCard analysisId={result.analysis_id} />}
+
+            {/* ═══ UPLOAD: Caption & Hashtags (not scored, ready to use) ═══ */}
+            {hasUploadCaptionSection && !canSeeCaptions && (
+              <div className="mt-6" id="upload-caption-section">
+                <h3 className="font-display text-xl font-bold text-foreground mb-1 tracking-tight">Caption & Hashtags</h3>
+                <p className="text-[13px] text-foreground/40 font-body mb-4">Captions and trending hashtags tailored to your content — ready to copy and paste.</p>
+                <div className="relative border border-border rounded-2xl p-5 sm:p-6 bg-foreground/[0.015] overflow-hidden">
+                  <div className="absolute inset-0 bg-background/80 backdrop-blur-sm z-10 flex flex-col items-center justify-center gap-3">
+                    <div className="w-12 h-12 rounded-full bg-foreground/[0.06] flex items-center justify-center">
+                      <Lock className="w-5 h-5 text-foreground/30" />
+                    </div>
+                    <p className="text-[14px] font-display font-bold text-foreground/60">Unlock captions & hashtags</p>
+                    <p className="text-[12px] text-foreground/35 font-body max-w-[30ch] text-center">Upgrade to {nextPlan?.name} to get AI-generated captions, hashtags, and trending audio for every video</p>
+                    <a href="/pricing" className="inline-flex items-center gap-1.5 px-5 py-2 rounded-full bg-foreground text-background text-[12px] font-body font-bold hover:opacity-90 transition-opacity">
+                      Upgrade to {nextPlan?.name} — {nextPlan?.price}
+                    </a>
+                  </div>
+                  <div className="select-none pointer-events-none">
+                    <div className="flex flex-wrap gap-1.5 mb-4">
+                      {['trending', 'viral', 'reels', 'fyp', 'explore'].map(t => (
+                        <span key={t} className="px-2.5 py-1 rounded-full bg-foreground/[0.03] border border-border/30 text-xs font-body text-foreground/10">#{t}</span>
+                      ))}
+                    </div>
+                    <div className="h-20 bg-foreground/[0.02] rounded-xl border border-border/30 mb-4" />
+                    <div className="h-8 bg-foreground/[0.02] rounded-lg border border-border/30 w-2/3" />
+                  </div>
+                </div>
+              </div>
+            )}
+            {hasUploadCaptionSection && canSeeCaptions && (
+              <div className="mt-6" id="upload-caption-section">
+                <h3 className="font-display text-xl font-bold text-foreground mb-1 tracking-tight">Caption & Hashtags</h3>
+                <p className="text-[13px] text-foreground/40 font-body mb-4">Captions and trending hashtags tailored to your content — ready to copy and paste.</p>
+                <div className="border border-border rounded-2xl p-5 sm:p-6 bg-foreground/[0.015]">
+                  {result.suggestedHashtags?.length > 0 && (
+                    <div className="mb-5">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-[11px] font-semibold tracking-widest uppercase text-foreground/30">Suggested Hashtags</p>
+                        <button onClick={() => copyText(result.suggestedHashtags.filter((h: string) => h.replace(/#/g, '').trim().length > 0).map((h: string) => h.startsWith('#') ? h : `#${h}`).join(' '), 'upload-hashtags')}
+                          className="text-[14px] text-foreground/30 hover:text-foreground/50 cursor-pointer transition-colors font-body underline">
+                          {copied === 'upload-hashtags' ? 'Copied!' : 'Copy all'}
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {result.suggestedHashtags
+                          .map((tag: string) => tag.replace(/^#+/, '').trim())
+                          .filter((tag: string) => tag.length > 0)
+                          .map((tag: string, i: number) => (
+                          <span key={i} className="px-2.5 py-1 rounded-full bg-secondary/60 border border-border text-xs font-body text-foreground/50">
+                            #{tag}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {result.suggestedCaption && (
+                    <div className="mb-5">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-[11px] font-semibold tracking-widest uppercase text-foreground/30">Suggested Caption</p>
+                        <button onClick={() => copyText(result.suggestedCaption, 'upload-caption')}
+                          className="text-[14px] text-foreground/30 hover:text-foreground/50 cursor-pointer transition-colors font-body underline">
+                          {copied === 'upload-caption' ? 'Copied!' : 'Copy'}
+                        </button>
+                      </div>
+                      <div className="bg-secondary/30 border border-border rounded-xl p-3.5">
+                        <p className="text-[14px] text-foreground/60 font-body leading-relaxed whitespace-pre-wrap">{result.suggestedCaption}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {result.trendingAudioSuggestion && (
+                    <div>
+                      <p className="text-[11px] font-semibold tracking-widest uppercase text-foreground/30 mb-2">Trending Audio Suggestion</p>
+                      <p className="text-[13px] text-foreground/50 font-body leading-relaxed">{result.trendingAudioSuggestion}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ═══ TRENDING SECTION ═══ */}
+            {isCompetitor && result.adaptToMyNiche && <AdaptCard block={result.adaptToMyNiche} />}
+
+            {hasTrendingSection && !canSeeCaptions && (
+              <div className="relative border border-border rounded-2xl p-5 mb-5 overflow-hidden" id="trending-section"
+                style={{ opacity: 0, animation: 'fade-slide-in 0.6s ease-out 200ms forwards' }}>
+                <div className="absolute inset-0 bg-background/80 backdrop-blur-sm z-10 flex flex-col items-center justify-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-foreground/[0.06] flex items-center justify-center">
+                    <Lock className="w-5 h-5 text-foreground/30" />
+                  </div>
+                  <p className="text-[14px] font-display font-bold text-foreground/60">Captions, hashtags & trending audio</p>
+                  <p className="text-[12px] text-foreground/35 font-body max-w-[30ch] text-center">Upgrade to {nextPlan?.name} to unlock AI-generated captions, trending hashtags, and audio suggestions</p>
+                  <a href="/pricing" className="inline-flex items-center gap-1.5 px-5 py-2 rounded-full bg-foreground text-background text-[12px] font-body font-bold hover:opacity-90 transition-opacity">
+                    Upgrade to {nextPlan?.name} — {nextPlan?.price}
+                  </a>
+                </div>
+                {/* Blurred preview */}
+                <div className="select-none pointer-events-none">
+                  <h2 className="font-display text-base font-bold tracking-tight mb-0.5 text-foreground/20">Trending for {result.niche}</h2>
+                  <p className="text-foreground/10 text-[14px] mb-4 font-body">Real data from {result.platform}</p>
+                  <div className="flex flex-wrap gap-1.5 mb-4">
+                    {['trending', 'viral', 'reels', 'content', 'creator'].map(t => (
+                      <span key={t} className="px-2 py-0.5 rounded-full bg-foreground/[0.03] border border-border/30 text-[14px] font-body text-foreground/10">#{t}</span>
+                    ))}
+                  </div>
+                  <div className="h-16 bg-foreground/[0.02] rounded-xl border border-border/30" />
+                </div>
+              </div>
+            )}
+            {hasTrendingSection && canSeeCaptions && (
+              <div className="border border-border rounded-2xl p-5 mb-5" id="trending-section"
+                style={{ opacity: 0, animation: 'fade-slide-in 0.6s ease-out 200ms forwards' }}>
+                <h2 className="font-display text-base font-bold tracking-tight mb-0.5">{isCompetitor ? 'Their Strategy — Use This' : `Trending for ${result.niche}`}</h2>
+                <p className="text-foreground/30 text-[14px] mb-4 font-body">{isCompetitor ? 'Hashtags and caption strategy this creator is ranking for — apply these to your content' : `Real data from ${result.platform} — copy and use these`}</p>
+
+                {result.suggestedHashtags?.length > 0 && (
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-[11px] font-semibold tracking-widest uppercase text-foreground/30">Suggested Hashtags</p>
+                      <button onClick={() => copyText(result.suggestedHashtags.map(h => `#${h}`).join(' '), 'hashtags')}
+                        className="text-[14px] text-foreground/30 hover:text-foreground/50 cursor-pointer transition-colors font-body underline">
+                        {copied === 'hashtags' ? 'Copied!' : 'Copy all'}
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {result.suggestedHashtags.map((tag, i) => (
+                        <span key={i} className="px-2 py-0.5 rounded-full bg-secondary/60 border border-border text-[14px] font-body text-foreground/50">
+                          #{tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {result.suggestedCaption && (
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-[11px] font-semibold tracking-widest uppercase text-foreground/30">{isCompetitor ? 'Caption for your version' : 'Suggested Caption'}</p>
+                      <button onClick={() => copyText(result.suggestedCaption, 'caption')}
+                        className="text-[14px] text-foreground/30 hover:text-foreground/50 cursor-pointer transition-colors font-body underline">
+                        {copied === 'caption' ? 'Copied!' : 'Copy'}
+                      </button>
+                    </div>
+                    <div className="bg-secondary/30 border border-border rounded-xl p-3.5">
+                      <p className="text-[14px] text-foreground/60 font-body leading-relaxed whitespace-pre-wrap">{result.suggestedCaption}</p>
+                    </div>
+                  </div>
+                )}
+
+                {result.trendingAudioSuggestion && (
+                  <div>
+                    <p className="text-[11px] font-semibold tracking-widest uppercase text-foreground/30 mb-1.5">Audio Suggestion</p>
+                    <p className="text-[14px] text-foreground/55 font-body leading-relaxed">{result.trendingAudioSuggestion}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* ═══ WHAT'S WORKING — shown AFTER fixes for own video ═══ */}
             {!isCompetitor && strongParams.length > 0 && (
               <div className="mb-5">
@@ -1556,163 +1687,27 @@ export default function Results({ injected }: { injected?: Record<string, unknow
               </div>
             )}
 
-            {/* ═══ TRENDING SECTION ═══ */}
-            {isCompetitor && result.adaptToMyNiche && <AdaptCard block={result.adaptToMyNiche} />}
-
-            {hasTrendingSection && !canSeeCaptions && (
-              <div className="relative border border-border rounded-2xl p-5 mb-5 overflow-hidden" id="trending-section"
-                style={{ opacity: 0, animation: 'fade-slide-in 0.6s ease-out 200ms forwards' }}>
-                <div className="absolute inset-0 bg-background/80 backdrop-blur-sm z-10 flex flex-col items-center justify-center gap-3">
-                  <div className="w-12 h-12 rounded-full bg-foreground/[0.06] flex items-center justify-center">
-                    <Lock className="w-5 h-5 text-foreground/30" />
-                  </div>
-                  <p className="text-[14px] font-display font-bold text-foreground/60">Captions, hashtags & trending audio</p>
-                  <p className="text-[12px] text-foreground/35 font-body max-w-[30ch] text-center">Upgrade to {nextPlan?.name} to unlock AI-generated captions, trending hashtags, and audio suggestions</p>
-                  <a href="/pricing" className="inline-flex items-center gap-1.5 px-5 py-2 rounded-full bg-foreground text-background text-[12px] font-body font-bold hover:opacity-90 transition-opacity">
-                    Upgrade to {nextPlan?.name} — {nextPlan?.price}
-                  </a>
-                </div>
-                {/* Blurred preview */}
-                <div className="select-none pointer-events-none">
-                  <h2 className="font-display text-base font-bold tracking-tight mb-0.5 text-foreground/20">Trending for {result.niche}</h2>
-                  <p className="text-foreground/10 text-[14px] mb-4 font-body">Real data from {result.platform}</p>
-                  <div className="flex flex-wrap gap-1.5 mb-4">
-                    {['trending', 'viral', 'reels', 'content', 'creator'].map(t => (
-                      <span key={t} className="px-2 py-0.5 rounded-full bg-foreground/[0.03] border border-border/30 text-[14px] font-body text-foreground/10">#{t}</span>
-                    ))}
-                  </div>
-                  <div className="h-16 bg-foreground/[0.02] rounded-xl border border-border/30" />
-                </div>
-              </div>
-            )}
-            {hasTrendingSection && canSeeCaptions && (
-              <div className="border border-border rounded-2xl p-5 mb-5" id="trending-section"
-                style={{ opacity: 0, animation: 'fade-slide-in 0.6s ease-out 200ms forwards' }}>
-                <h2 className="font-display text-base font-bold tracking-tight mb-0.5">{isCompetitor ? 'Their Strategy — Use This' : `Trending for ${result.niche}`}</h2>
-                <p className="text-foreground/30 text-[14px] mb-4 font-body">{isCompetitor ? 'Hashtags and caption strategy this creator is ranking for — apply these to your content' : `Real data from ${result.platform} — copy and use these`}</p>
-
-                {result.suggestedHashtags?.length > 0 && (
-                  <div className="mb-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-[11px] font-semibold tracking-widest uppercase text-foreground/30">Suggested Hashtags</p>
-                      <button onClick={() => copyText(result.suggestedHashtags.map(h => `#${h}`).join(' '), 'hashtags')}
-                        className="text-[14px] text-foreground/30 hover:text-foreground/50 cursor-pointer transition-colors font-body underline">
-                        {copied === 'hashtags' ? 'Copied!' : 'Copy all'}
-                      </button>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {result.suggestedHashtags.map((tag, i) => (
-                        <span key={i} className="px-2 py-0.5 rounded-full bg-secondary/60 border border-border text-[14px] font-body text-foreground/50">
-                          #{tag}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {result.suggestedCaption && (
-                  <div className="mb-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-[11px] font-semibold tracking-widest uppercase text-foreground/30">{isCompetitor ? 'Caption for your version' : 'Suggested Caption'}</p>
-                      <button onClick={() => copyText(result.suggestedCaption, 'caption')}
-                        className="text-[14px] text-foreground/30 hover:text-foreground/50 cursor-pointer transition-colors font-body underline">
-                        {copied === 'caption' ? 'Copied!' : 'Copy'}
-                      </button>
-                    </div>
-                    <div className="bg-secondary/30 border border-border rounded-xl p-3.5">
-                      <p className="text-[14px] text-foreground/60 font-body leading-relaxed whitespace-pre-wrap">{result.suggestedCaption}</p>
-                    </div>
-                  </div>
-                )}
-
-                {result.trendingAudioSuggestion && (
-                  <div>
-                    <p className="text-[11px] font-semibold tracking-widest uppercase text-foreground/30 mb-1.5">Audio Suggestion</p>
-                    <p className="text-[14px] text-foreground/55 font-body leading-relaxed">{result.trendingAudioSuggestion}</p>
-                  </div>
-                )}
-              </div>
+            {/* ═══ MODELS USED ═══ */}
+            {result.modelsUsed && result.modelsUsed.length > 0 && (
+              <details className="border border-border rounded-2xl px-4 py-2.5 mb-4">
+                <summary className="cursor-pointer text-[12px] font-semibold tracking-widest uppercase text-foreground/40 font-body">Models used</summary>
+                <ul className="mt-3 space-y-1.5">
+                  {result.modelsUsed.map(m => (
+                    <li key={m.step} className="flex items-baseline justify-between gap-4 text-[12px] font-body">
+                      <span className="text-foreground/50">{m.step}</span>
+                      <span className="text-foreground/35 text-right">
+                        {m.model}
+                        {m.note ? ` · ${m.note}` : ''}
+                        {m.status === 'unavailable' || m.status === 'error' ? ' · not available for this video' : ''}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
             )}
 
-            {/* ═══ UPLOAD: Caption & Hashtags (not scored, ready to use) ═══ */}
-            {hasUploadCaptionSection && !canSeeCaptions && (
-              <div className="mt-6" id="upload-caption-section">
-                <h3 className="font-display text-xl font-bold text-foreground mb-1 tracking-tight">Caption & Hashtags</h3>
-                <p className="text-[13px] text-foreground/40 font-body mb-4">Captions and trending hashtags tailored to your content — ready to copy and paste.</p>
-                <div className="relative border border-border rounded-2xl p-5 sm:p-6 bg-foreground/[0.015] overflow-hidden">
-                  <div className="absolute inset-0 bg-background/80 backdrop-blur-sm z-10 flex flex-col items-center justify-center gap-3">
-                    <div className="w-12 h-12 rounded-full bg-foreground/[0.06] flex items-center justify-center">
-                      <Lock className="w-5 h-5 text-foreground/30" />
-                    </div>
-                    <p className="text-[14px] font-display font-bold text-foreground/60">Unlock captions & hashtags</p>
-                    <p className="text-[12px] text-foreground/35 font-body max-w-[30ch] text-center">Upgrade to {nextPlan?.name} to get AI-generated captions, hashtags, and trending audio for every video</p>
-                    <a href="/pricing" className="inline-flex items-center gap-1.5 px-5 py-2 rounded-full bg-foreground text-background text-[12px] font-body font-bold hover:opacity-90 transition-opacity">
-                      Upgrade to {nextPlan?.name} — {nextPlan?.price}
-                    </a>
-                  </div>
-                  <div className="select-none pointer-events-none">
-                    <div className="flex flex-wrap gap-1.5 mb-4">
-                      {['trending', 'viral', 'reels', 'fyp', 'explore'].map(t => (
-                        <span key={t} className="px-2.5 py-1 rounded-full bg-foreground/[0.03] border border-border/30 text-xs font-body text-foreground/10">#{t}</span>
-                      ))}
-                    </div>
-                    <div className="h-20 bg-foreground/[0.02] rounded-xl border border-border/30 mb-4" />
-                    <div className="h-8 bg-foreground/[0.02] rounded-lg border border-border/30 w-2/3" />
-                  </div>
-                </div>
-              </div>
-            )}
-            {hasUploadCaptionSection && canSeeCaptions && (
-              <div className="mt-6" id="upload-caption-section">
-                <h3 className="font-display text-xl font-bold text-foreground mb-1 tracking-tight">Caption & Hashtags</h3>
-                <p className="text-[13px] text-foreground/40 font-body mb-4">Captions and trending hashtags tailored to your content — ready to copy and paste.</p>
-                <div className="border border-border rounded-2xl p-5 sm:p-6 bg-foreground/[0.015]">
-                  {result.suggestedHashtags?.length > 0 && (
-                    <div className="mb-5">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-[11px] font-semibold tracking-widest uppercase text-foreground/30">Suggested Hashtags</p>
-                        <button onClick={() => copyText(result.suggestedHashtags.filter((h: string) => h.replace(/#/g, '').trim().length > 0).map((h: string) => h.startsWith('#') ? h : `#${h}`).join(' '), 'upload-hashtags')}
-                          className="text-[14px] text-foreground/30 hover:text-foreground/50 cursor-pointer transition-colors font-body underline">
-                          {copied === 'upload-hashtags' ? 'Copied!' : 'Copy all'}
-                        </button>
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {result.suggestedHashtags
-                          .map((tag: string) => tag.replace(/^#+/, '').trim())
-                          .filter((tag: string) => tag.length > 0)
-                          .map((tag: string, i: number) => (
-                          <span key={i} className="px-2.5 py-1 rounded-full bg-secondary/60 border border-border text-xs font-body text-foreground/50">
-                            #{tag}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {result.suggestedCaption && (
-                    <div className="mb-5">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-[11px] font-semibold tracking-widest uppercase text-foreground/30">Suggested Caption</p>
-                        <button onClick={() => copyText(result.suggestedCaption, 'upload-caption')}
-                          className="text-[14px] text-foreground/30 hover:text-foreground/50 cursor-pointer transition-colors font-body underline">
-                          {copied === 'upload-caption' ? 'Copied!' : 'Copy'}
-                        </button>
-                      </div>
-                      <div className="bg-secondary/30 border border-border rounded-xl p-3.5">
-                        <p className="text-[14px] text-foreground/60 font-body leading-relaxed whitespace-pre-wrap">{result.suggestedCaption}</p>
-                      </div>
-                    </div>
-                  )}
-
-                  {result.trendingAudioSuggestion && (
-                    <div>
-                      <p className="text-[11px] font-semibold tracking-widest uppercase text-foreground/30 mb-2">Trending Audio Suggestion</p>
-                      <p className="text-[13px] text-foreground/50 font-body leading-relaxed">{result.trendingAudioSuggestion}</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
+            {/* ═══ COST BREAKDOWN (local flag or founder only; renders nothing otherwise) ═══ */}
+            <CostPanel analysisId={result.analysis_id} />
 
             {/* ═══ BOTTOM ACTIONS ═══ */}
             <div className="mt-8 mb-4">

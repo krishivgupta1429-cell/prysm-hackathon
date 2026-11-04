@@ -9,6 +9,7 @@ import Analyse from "./pages/Analyse";
 import AnalyseUpload from "./pages/AnalyseUpload";
 import AnalyseLink from "./pages/AnalyseLink";
 import Results from "./pages/Results";
+import Edit from "./pages/Edit"; // hackathon: Auto-edit studio
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
@@ -56,6 +57,7 @@ const App = () => (
             <Route path="/analyse/upload" element={gated ? <Waitlist /> : <AnalyseUpload />} />
             <Route path="/analyse/link" element={!ALLOW_LINKS ? <Navigate to="/analyse/upload" replace /> : gated ? <Waitlist /> : <AnalyseLink />} />
             <Route path="/results" element={gated ? <Waitlist /> : <Results />} />
+            <Route path="/edit/:analysisId" element={gated ? <Waitlist /> : <Edit />} />
             <Route path="/chat" element={gated ? <Waitlist /> : <Chat />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />

@@ -1,6 +1,7 @@
 // Built during the Meta Global AI Developer Hackathon (new work).
-// "Predicted Viewer Behaviour". With Instagram data imported it shows the creator's MEASURED averages (watch-through, skip rate, reach)
-// from their own reels, labelled "measured from your account". Without it, no percentage bars: a line that links to the connect flow.
+// "Viewer behaviour". Two plain-English sections: "Your account so far (measured)" (usually watched, skipped early, typical reach, from the
+// creator's own imported reels, with "based on your last N reels" and "small sample" under 5) and "This video's rhythm (our estimate)"
+// (one sentence + one compact strip, details behind a toggle). Without Instagram data there are no percentage bars: a line links to the connect flow.
 // The zero-shot Qwen hook/watch percentages (near-constant, about 70% for every video) are hidden unless VITE_SHOW_QWEN_CARD=1, and
 // then they still say "Rough estimate from frame content, not measured watch data". The separate "Visual quality signal" from Q-Align stays.
 // Source "evqa" (a model trained on watch data) keeps its bars. Black-and-white, inline styles. The subtitle says honestly where the numbers
@@ -81,17 +82,18 @@ export type Measured = {
   avgWatchThrough?: number | null; watchThroughReels?: number; partialReels?: number; avgSkipRate?: number | null; medianReach?: number | null
 }
 
-function Stat({ label, value, note }: { label: string; value: string; note: string }) {
+const SMALL_SAMPLE_BELOW = 5
+
+function Line({ label, value, testid }: { label: string; value: string; testid: string }) {
   return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-        <span style={{ fontSize: 13, color: '#525252' }}>{label}</span>
-        <span style={{ fontSize: 18, fontWeight: 800 }}>{value}</span>
-      </div>
-      <p style={{ fontSize: 11, color: '#a3a3a3', margin: '2px 0 0' }}>{note}</p>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, padding: '7px 0', borderTop: '1px solid #f0f0f0' }} data-testid={testid}>
+      <span style={{ fontSize: 13, color: '#525252' }}>{label}</span>
+      <span style={{ fontSize: 15, fontWeight: 800, textAlign: 'right' }}>{value}</span>
     </div>
   )
 }
+
+const sectionTitle: CSSProperties = { fontSize: 13, fontWeight: 700, margin: 0 }
 
 export default function ViewerBehaviourCard({ ep, attention }: { ep?: Engagement | null; attention?: ViewerAttention | null }) {
   const [m, setM] = useState<Measured | null | undefined>(undefined)
@@ -104,26 +106,37 @@ export default function ViewerBehaviourCard({ ep, attention }: { ep?: Engagement
   }, [])
   const unavailable = !ep || ep.available === false || ep.ecr == null || ep.nawp == null
   const showEstimate = !unavailable && (ep!.source === 'evqa' || (ep!.source === 'qwen_zero_shot' && SHOW_QWEN_CARD))
-  const none = (v: number | null | undefined, f: (x: number) => string) => (v == null ? 'not available' : f(v))
+  const n = m?.reels ?? 0
+  const na = 'not available'
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16, marginBottom: 20 }}>
-      <div style={{ ...box, gridColumn: 'span 1' }} data-testid="viewer-behaviour">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-          <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Predicted Viewer Behaviour</h2>
-          {m && <span style={tag}>{m.isFixture ? 'Test data' : 'Measured'}</span>}
-        </div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16, marginBottom: 16 }}>
+      <div style={{ ...box, padding: 18 }} data-testid="viewer-behaviour">
+        <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Viewer behaviour</h2>
+
         {m ? (
-          <div data-testid="measured">
-            <p style={sub}>Measured from your account: averages over your last {m.reels} imported reels, not a prediction for this video.{m.isFixture ? ' TEST DATA from the development fixture.' : ''}</p>
-            <Stat label="Average watch-through" value={none(m.avgWatchThrough, v => `${Math.round(v * 100)}%`)} note={m.watchThroughReels ? `of the reel's length, over ${m.watchThroughReels} reels with watch time${m.partialReels ? `; ${m.partialReels} reel${m.partialReels === 1 ? ' has' : 's have'} no video file from Instagram and no watch-through` : ''}` : 'Instagram gave no watch time for these reels'} />
-            <Stat label="Average skip rate" value={none(m.avgSkipRate, v => `${Math.round(v)}%`)} note="share of views that skipped early (Instagram's estimate)" />
-            <Stat label="Typical reach" value={none(m.medianReach, v => Math.round(v).toLocaleString())} note="median accounts reached per reel" />
+          <div data-testid="measured" style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+              <h3 style={sectionTitle}>Your account so far <span style={{ fontWeight: 500, color: '#737373' }}>(measured)</span></h3>
+              <span style={tag}>{m.isFixture ? 'Test data' : 'Measured'}</span>
+            </div>
+            <Line testid="m-watched" label="Usually watched" value={m.avgWatchThrough == null ? na : `${Math.round(m.avgWatchThrough * 100)}% of a reel`} />
+            <Line testid="m-skipped" label="Skipped early" value={m.avgSkipRate == null ? na : `${Math.round(m.avgSkipRate)}% of views`} />
+            <Line testid="m-reach" label="Typical reach" value={m.medianReach == null ? na : `${Math.round(m.medianReach).toLocaleString()} accounts`} />
+            <p style={{ fontSize: 11, color: '#737373', margin: '8px 0 0', lineHeight: 1.45 }} data-testid="m-basis">
+              Based on your last {n} reel{n === 1 ? '' : 's'}
+              {n < SMALL_SAMPLE_BELOW && <span style={{ ...tag, marginLeft: 8, color: '#0a0a0a', borderColor: '#0a0a0a' }} data-testid="m-small">small sample</span>}
+              {m.isFixture ? ' · TEST DATA from the development fixture' : ''}
+              {m.avgWatchThrough != null && m.partialReels ? ` · ${m.partialReels} reel${m.partialReels === 1 ? '' : 's'} had no watch time from Instagram` : ''}
+            </p>
           </div>
         ) : m === null ? (
           <p style={{ ...sub, color: '#0a0a0a', fontSize: 14, margin: '12px 0 0' }} data-testid="connect-line">
             <Link to="/creator-dna" style={{ color: '#0a0a0a', fontWeight: 700 }}>Connect Instagram to see viewer behaviour measured from your own reels</Link>
           </p>
-        ) : <p style={sub}>Loading…</p>}
+        ) : <p style={{ ...sub, margin: '12px 0 0' }}>Loading…</p>}
+
+        {attention && <AttentionStrip a={attention} />}
+
         {showEstimate && (
           <div style={{ borderTop: '1px solid #eee', marginTop: 16, paddingTop: 12 }} data-testid="estimate">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
@@ -135,7 +148,6 @@ export default function ViewerBehaviourCard({ ep, attention }: { ep?: Engagement
             <Bar label="Average Watch Rate" value={ep!.nawp as number} caption={RETAIN[ep!.retention_risk || 'medium']} note="% of the video the average viewer is predicted to watch" />
           </div>
         )}
-        {attention && <AttentionStrip a={attention} />}
       </div>
       {ep?.qalign && <QualityPanel q={ep.qalign} />}
     </div>

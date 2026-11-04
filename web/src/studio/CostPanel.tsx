@@ -3,7 +3,7 @@
 // (VITE_FOUNDER_EMAIL); the backend answers 404 to anyone else, so normal users never get the numbers or any hint of them.
 import { useEffect, useState } from 'react'
 import { apiUrl } from '@/lib/api'
-import { getToken, getUser } from '@/lib/auth'
+import { authFetch, getToken, getUser } from '@/lib/auth'
 import { FOUNDER_EMAIL, SHOW_COST_PANEL } from '@/lib/config'
 
 type Llm = { model?: string | null; tokens_in: number; tokens_out: number; reasoning_tokens: number; cost_usd: number; calls?: number; note?: string }
@@ -37,12 +37,12 @@ export default function CostPanel({ analysisId }: { analysisId?: string }) {
   useEffect(() => {
     const tk = getToken()
     if (!allowed || !analysisId || !tk) return
-    fetch(apiUrl(`/prysm/dashboard/${analysisId}/cost`), { headers: { Authorization: `Bearer ${tk}` } })
+    authFetch(apiUrl(`/prysm/dashboard/${analysisId}/cost`))
       .then(r => (r.ok ? r.json() : null))
       .then(d => setData(d?.cost?.breakdown ?? null))
       .catch(() => setData(null))
     // Auto-edit cost (404 unless the flag is on and an edit exists)
-    fetch(apiUrl(`/prysm/auto-edit/${analysisId}/cost`), { headers: { Authorization: `Bearer ${tk}` } })
+    authFetch(apiUrl(`/prysm/auto-edit/${analysisId}/cost`))
       .then(r => (r.ok ? r.json() : null)).then(setEdit).catch(() => setEdit(null))
   }, [allowed, analysisId])
 

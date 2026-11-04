@@ -3,7 +3,7 @@
 // ReelCard as the Creator DNA page), or a "Connect Instagram" call to action when nothing is connected. Picking a reel hands its link back.
 import { useEffect, useState } from 'react'
 import { apiUrl } from '@/lib/api'
-import { getToken } from '@/lib/auth'
+import { authFetch } from '@/lib/auth'
 import { ReelCard } from './creator/ReelCard'
 import type { DnaResp, Reel } from './creator/types'
 
@@ -16,8 +16,7 @@ export default function OwnReelPicker({ pickedUrl, onPick }: { pickedUrl: string
 
   useEffect(() => {
     let live = true
-    const tk = getToken()
-    fetch(apiUrl('/instagram/dna'), { headers: tk ? { Authorization: `Bearer ${tk}` } : {} })
+    authFetch(apiUrl('/instagram/dna'))
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d: DnaResp) => { if (live) { setData(d); setState('ready') } })
       .catch(() => { if (live) setState('error') })
