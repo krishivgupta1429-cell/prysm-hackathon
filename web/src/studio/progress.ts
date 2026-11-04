@@ -2,7 +2,7 @@
 // The original analysis pipeline reports the real stage of a job in the `progress` field of /prysm/analyse/status/{job}.
 // These helpers turn that into labels and counts for the processing screen (only used when VITE_STUDIO_MODE=1).
 
-export type StageState = 'pending' | 'running' | 'done' | 'skipped'
+export type StageState = 'pending' | 'running' | 'done' | 'skipped' | 'failed'
 
 export const STUDIO_STAGES: { id: string; label: string; core: boolean }[] = [
   { id: 'frames', label: 'Preparing frames and audio', core: true },
@@ -31,12 +31,13 @@ export function stageState(progress: Progress | null | undefined, id: string): S
   if (v === 'running') return 'running'
   if (v === 'ok' || v === 'cached') return 'done'
   if (v === 'pending') return 'pending'
-  if (v) return 'skipped' // error, skipped: the stage did not contribute but the job carries on
+  if (v === 'error') return 'failed' // an error is never shown as skipped
+  if (v) return 'skipped' // skipped / not_configured: the stage did not run on purpose
   return 'pending'
 }
 
 export function doneCount(progress: Progress | null | undefined): number {
-  return visibleStages(progress).filter(s => ['done', 'skipped'].includes(stageState(progress, s.id))).length
+  return visibleStages(progress).filter(s => ['done', 'skipped', 'failed'].includes(stageState(progress, s.id))).length
 }
 
 /** The sentence for the status line: what is running now (or the next stage while one finishes). */

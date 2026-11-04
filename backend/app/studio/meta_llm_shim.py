@@ -125,24 +125,32 @@ def call_group(messages: list, stream: bool = False) -> str:
     return "scoring"
 
 
-def meta_model_for(requested: str | None, group: str | None = None) -> str:
-    """The Meta model that serves a Claude model id. Order: an explicit muse-/sam- id, a META_MODEL_MAP entry,
-    META_VISION_MODEL / META_SCORING_MODEL / META_CHAT_MODEL for the call's group, META_MODEL, then muse-spark-1.3."""
+def configured_model(requested: str | None, group: str | None = None) -> tuple[str, str]:
+    """(Meta model id, where it came from) exactly as configured: an explicit muse-/sam- id, a META_MODEL_MAP entry,
+    META_VISION_MODEL / META_SCORING_MODEL / META_CHAT_MODEL for the call's group, META_MODEL, then muse-spark-1.3. No availability check."""
     if requested and requested.startswith(("muse-", "sam-")):
-        return requested
+        return requested, "the call"
     raw = config.get_env("META_MODEL_MAP")
     if raw and requested:
         try:
             mapped = json.loads(raw).get(requested)
             if mapped:
-                return str(mapped)
+                return str(mapped), "META_MODEL_MAP"
         except ValueError:
             log.warning("META_MODEL_MAP is not valid JSON; ignoring it")
     if group:
         by_group = config.get_env(f"META_{group.upper()}_MODEL")
         if by_group:
-            return by_group
-    return config.get_env("META_MODEL") or DEFAULT_MODEL
+            return by_group, f"META_{group.upper()}_MODEL"
+    env_model = config.get_env("META_MODEL")
+    return (env_model, "META_MODEL") if env_model else (DEFAULT_MODEL, "the built-in default")
+
+
+def meta_model_for(requested: str | None, group: str | None = None) -> str:
+    """The Meta model that serves a Claude model id (see configured_model). If the key is known not to have that plain Muse Spark id, the newest
+    plain Muse Spark id it does have is used instead (app/studio/model_check.py logs it); an unknown availability changes nothing."""
+    from app.studio import model_check
+    return model_check.apply_fallback(configured_model(requested, group)[0])
 
 
 def max_images() -> int:

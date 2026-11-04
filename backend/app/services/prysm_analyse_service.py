@@ -2323,7 +2323,18 @@ async def run_full_analysis(
         tasks = {}
 
         if frames:
-            tasks["vision"] = tracked(_pcb, "vision", analyse_frames_with_claude(frames, niche, platform, brief))
+            async def _vision_with_one_retry():
+                # hackathon (AI_PROVIDER=meta): a failed vision step is retried once, then the analysis fails clearly (below); the original
+                # pipeline carried on without vision, which produced a hollow report and showed the step as skipped
+                try:
+                    return await analyse_frames_with_claude(frames, niche, platform, brief)
+                except Exception as _ve1:
+                    if not settings.META_MODE or isinstance(_ve1, (anthropic.RateLimitError, anthropic.APITimeoutError, anthropic.APIConnectionError)):
+                        raise  # (these were already retried with backoff)
+                    logger.warning(f"[Prysm] Vision failed ({type(_ve1).__name__}) - retrying once")
+                    await asyncio.sleep(2)
+                    return await analyse_frames_with_claude(frames, niche, platform, brief)
+            tasks["vision"] = tracked(_pcb, "vision", _vision_with_one_retry())
 
         # Embedding extraction — runs in parallel with Sonnet Vision in Step B.
         # 45s timeout guards against cold model downloads blocking the analysis.
@@ -2420,6 +2431,10 @@ async def run_full_analysis(
             vision_data = results_map["vision"]
         elif "vision" in results_map:
             logger.error(f"[Prysm] Vision failed: {results_map['vision']}")
+            if settings.META_MODE:
+                from app.studio.model_check import AnalysisUnavailable, FRIENDLY_START, FRIENDLY_FAILED, is_model_error
+                _vf = results_map["vision"]
+                raise AnalysisUnavailable(FRIENDLY_START if is_model_error(_vf) else FRIENDLY_FAILED, str(_vf))
 
         if "whisper" in results_map and not isinstance(results_map["whisper"], Exception):
             whisper_data = results_map["whisper"]

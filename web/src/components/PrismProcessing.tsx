@@ -146,9 +146,10 @@ export default function PrismProcessing({ status, progress }: Props) {
                       {state === 'running'
                         ? <span className="w-2 h-2 rounded-full border border-foreground/50 border-t-transparent animate-spin" />
                         : state === 'pending' ? <span className="w-1.5 h-1.5 rounded-full bg-foreground/15" />
+                        : state === 'failed' ? <span className="text-red-500/70">✕</span>
                         : <span className="text-green-600/70">{state === 'done' ? '✓' : '–'}</span>}
                     </span>
-                    {st.label}{progress?.[st.id] === 'not_configured' ? ' (skipped)' : ''}
+                    {st.label}{progress?.[st.id] === 'not_configured' ? ' (skipped)' : state === 'failed' ? ' (could not run)' : ''}
                   </li>
                 )
               })}

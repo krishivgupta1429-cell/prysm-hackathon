@@ -66,6 +66,7 @@ There is **no separate queue worker process**. The analysis queue is a Redis lis
 | `TOKEN_ENCRYPTION_KEY` | yes | section A |
 | `AI_PROVIDER` | yes | `meta` |
 | `META_API_KEY` | yes | the Muse key you use in your local `backend/.env` (do not paste it anywhere else) |
+| `META_MODEL`, `META_VISION_MODEL`, `META_SCORING_MODEL`, `META_CHAT_MODEL`, `META_MODEL_MAP` | **no: leave unset** | The code already uses `muse-spark-1.3` for every step. If one of these names a model the key cannot use, Meta answers `HTTP 404 model_not_found`. To pin explicitly, set the first four to `muse-spark-1.3` and leave the map unset. |
 | `META_VISION_MODEL`, `META_SCORING_MODEL`, `META_CHAT_MODEL` | no | default `muse-spark-1.3`; leave unset |
 | `GROQ_API_KEY` | yes | <https://console.groq.com/keys> (speech transcription) |
 | `GEMINI_API_KEY` | recommended | <https://aistudio.google.com/apikey> (audio and trend stages; without it they are skipped, logged as a warning) |
@@ -180,3 +181,11 @@ Caps live in Redis counters. If you recreate Redis, the day's total restarts at 
 ## Not verified from here
 
 Written and tested locally, not run on Railway, Vercel or Cloudflare: the Railway variable-reference syntax (`${{...}}`), the Docker-image Postgres service, the R2 CORS and lifecycle screens (their labels change), and the memory a Railway plan needs. Treat the first deploy as the test; the startup message names exactly what is missing.
+
+## Meta model check (what the logs tell you)
+
+At start-up the backend asks Meta (free `GET /v1/models`) which models the key can use and logs one line, e.g. `[Models] startup check: vision=muse-spark-1.3, scoring=muse-spark-1.3, chat=muse-spark-1.3`. A configured model the key cannot use is logged as `[Models] WARNING: the <step> model <id> (from <VARIABLE NAME>) is not in this key's model list; using <id>` (names only, never the key). Behaviour:
+
+* A missing plain Muse Spark model is replaced by the newest plain Muse Spark model the key has (never a `-contributor` one). If there is none, every analysis is refused in the first seconds with "We couldn't start the analysis. Please try again in a few minutes." and the log says which variable set the bad model.
+* A step that errors is retried once. The vision step then fails the analysis clearly (no hollow report); optional steps show "(could not run)" instead of "skipped".
+* The check is repeated at the start of each analysis (cached for 5 minutes); it only spends money (about $0.001) when a model is missing from the list and needs confirming.

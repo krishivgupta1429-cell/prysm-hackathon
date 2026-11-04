@@ -136,6 +136,9 @@ async def lifespan(app: FastAPI):
     import asyncio as _asyncio
     _asyncio.create_task(_worker_loop())
     logger.info("Analysis worker loop started.")
+    if settings.META_MODE:   # hackathon: log at start-up which configured Meta model this key cannot use (names only, never the key)
+        from app.studio import model_check
+        _asyncio.create_task(model_check.startup_check())
 
     # Pre-warm embedding models in background thread so the first user request
     # doesn't pay the cold model-load cost (~30-60s for ~3.7GB of weights).

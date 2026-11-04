@@ -67,7 +67,8 @@ async def _run_with_timeout(payload: dict):
     except Exception as e:
         import traceback
         _log.error(f"[Prysm Worker] Job {job_id} crashed: {e}\n{traceback.format_exc()}")
-        await cache_set(f"prysm:job:{job_id}", {"status": "failed", "error": str(e)}, ttl=3600)
+        from app.studio.model_check import friendly_error   # hackathon: never show raw provider text ("shim: HTTP 404 ...") to a user
+        await cache_set(f"prysm:job:{job_id}", {"status": "failed", "error": friendly_error(e)}, ttl=3600)
 
 
 async def _worker_loop():
@@ -177,6 +178,11 @@ async def _run_analysis_task(
         # Fail fast if the video file was lost (e.g. Railway redeployed between upload and worker pickup)
         if not os.path.exists(video_path):
             raise RuntimeError(f"Video file missing -- please try uploading again. (path={video_path})")
+
+        if settings.META_MODE:
+            # Fail in the first seconds, not after minutes of work, when a required Meta model cannot be used (friendly message, see model_check)
+            from app.studio import model_check
+            await model_check.ensure_models()
 
         async def credit_checker(stage1_cost_usd: float) -> bool:
             """Deduct stage1 cost mid-pipeline; return True if credits now exhausted."""
@@ -479,7 +485,8 @@ async def _run_analysis_task(
     except Exception as e:
         import traceback
         _log.error(f"[Prysm] Job {job_id} failed: {e}\n{traceback.format_exc()}")
-        await cache_set(f"prysm:job:{job_id}", {"status": "failed", "error": str(e)}, ttl=3600)
+        from app.studio.model_check import friendly_error   # hackathon: never show raw provider text ("shim: HTTP 404 ...") to a user
+        await cache_set(f"prysm:job:{job_id}", {"status": "failed", "error": friendly_error(e)}, ttl=3600)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
         if settings.META_MODE:
@@ -1687,7 +1694,8 @@ async def chat_with_analysis(
 
             yield "data: [DONE]\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            from app.studio.model_check import friendly_error   # hackathon: no raw provider text in the chat either
+            yield f"data: {json.dumps({'error': friendly_error(e)})}\n\n"
 
     from starlette.responses import StreamingResponse as StarletteStreamingResponse
     return StarletteStreamingResponse(

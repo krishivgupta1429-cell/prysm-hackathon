@@ -79,7 +79,14 @@ class Evidence:
 async def _guard(name: str, timeout: float, fn, notes: list[str]):
     """Run a blocking stage in a thread with a timeout; None (and a note) on failure, never an exception."""
     try:
-        return await asyncio.wait_for(asyncio.to_thread(fn), timeout)
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(fn), timeout)
+        except asyncio.TimeoutError:
+            raise
+        except Exception as first:  # an error (not a timeout) is retried once before the step is reported as failed
+            log.warning("[Evidence] %s failed (%s), retrying once", name, type(first).__name__)
+            await asyncio.sleep(1.5)
+            return await asyncio.wait_for(asyncio.to_thread(fn), timeout)
     except Exception as e:  # includes asyncio.TimeoutError
         notes.append(f"{name}: {type(e).__name__}: {config.redact(str(e))[:200]}")
         log.warning("[Evidence] %s failed: %s", name, config.redact(str(e))[:200])
