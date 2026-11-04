@@ -28,5 +28,7 @@ export const FOUNDER_EMAIL: string = ((env.VITE_FOUNDER_EMAIL as string | undefi
  *  zero-shot guess is near-constant (about 70% for every video). When on, the card still says "Rough estimate from frame content, not measured watch data". */
 export const SHOW_QWEN_CARD: boolean = env.VITE_SHOW_QWEN_CARD === '1'
 
-/** The wait-time line shown on every progress screen (measured: most analyses take 3 to 6 minutes, the longest seen 9). */
-export const ESTIMATE = 'Usually takes 3 to 6 minutes. A longer reel can take up to 9.'
+/** The wait-time line shown on every progress screen, and the line that replaces it once an analysis has run longer than SLOW_AFTER_S. */
+export const ESTIMATE = 'Usually takes 3 to 6 minutes.'
+export const SLOW_NOTICE = 'Taking longer than expected. Please keep this tab open.'
+export const SLOW_AFTER_S = 9 * 60

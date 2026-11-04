@@ -167,3 +167,28 @@ def test_the_music_step_is_skipped_when_the_evidence_stops_early():
     # the file does not exist, so the evidence stops at the probe: the music step must still be closed out
     asyncio.run(ev.collect_evidence("/nonexistent.mp4", "/tmp", progress=lambda stage, status: seen.append((stage, status))))
     assert ("music_id", "skipped") in seen
+
+
+def _music_only(monkeypatch, tmp_path, creds, status="ok"):
+    """Run collect_evidence with only the music part on, on a fake video with audio; returns the progress calls."""
+    import asyncio
+    from types import SimpleNamespace
+    from app.studio import media
+    monkeypatch.setattr(ev.config, "get_env", lambda name: "1" if name == "EVIDENCE_MUSIC_ID" else ("0" if name in ev.FLAGS.values() else None))
+    monkeypatch.setattr(ev.media, "probe", lambda p: SimpleNamespace(duration_s=10.0, has_audio=True))
+    wav = tmp_path / "a.wav"; wav.write_bytes(b"x")
+    monkeypatch.setattr(ev.media, "prepare", lambda *a, **k: SimpleNamespace(errors={}, wav=wav, frames_dir=None, proxy=None, sam_clip=None))
+    monkeypatch.setattr(ev.config, "acr_credentials", lambda: creds)
+    monkeypatch.setattr(ev, "MetaClient", lambda: SimpleNamespace(ledger=[], total_cost=0.0))
+    monkeypatch.setattr(ev, "run_music_id", lambda *a, **k: MusicIdStage(status=status))
+    seen = []
+    asyncio.run(ev.collect_evidence(str(tmp_path / "v.mp4"), str(tmp_path), progress=lambda s, st: seen.append((s, st))))
+    return [x for x in seen if x[0] == "music_id"]
+
+
+def test_music_step_runs_then_finishes_like_the_other_steps_when_the_service_is_configured(monkeypatch, tmp_path):
+    assert _music_only(monkeypatch, tmp_path, ("h", "k", "s")) == [("music_id", "running"), ("music_id", "ok")]
+
+
+def test_music_step_says_not_configured_only_when_the_service_is_really_not_set_up(monkeypatch, tmp_path):
+    assert _music_only(monkeypatch, tmp_path, (None, None, None), status="skipped") == [("music_id", "not_configured")]

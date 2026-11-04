@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { STUDIO_MODE, ESTIMATE } from '@/lib/config'
+import { STUDIO_MODE, ESTIMATE, SLOW_NOTICE, SLOW_AFTER_S } from '@/lib/config'
 import { visibleStages, doneCount, stageState, type Progress } from '@/studio/progress'
 
 interface Props {
@@ -20,6 +20,13 @@ const FACTS = [
 
 export default function PrismProcessing({ status, progress }: Props) {
   const [factIdx, setFactIdx] = useState(0)
+  const [elapsed, setElapsed] = useState(0)
+
+  useEffect(() => {
+    const timer = setInterval(() => setElapsed(e => e + 1), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  const waitLine = elapsed > SLOW_AFTER_S ? SLOW_NOTICE : ESTIMATE
 
   useEffect(() => {
     const timer = setInterval(() => setFactIdx(i => (i + 1) % FACTS.length), 6000)
@@ -141,19 +148,19 @@ export default function PrismProcessing({ status, progress }: Props) {
                         : state === 'pending' ? <span className="w-1.5 h-1.5 rounded-full bg-foreground/15" />
                         : <span className="text-green-600/70">{state === 'done' ? '✓' : '–'}</span>}
                     </span>
-                    {st.label}{state === 'skipped' ? ' (skipped)' : ''}
+                    {st.label}{progress?.[st.id] === 'not_configured' ? ' (skipped)' : ''}
                   </li>
                 )
               })}
             </ul>
             <p className="text-[12px] text-foreground/30 font-body mt-5 text-center leading-relaxed">
-              {ESTIMATE}
+              {waitLine}
             </p>
           </div>
         )}
 
         {/* Time estimate for the normal site (demo mode shows the same line under the step list) */}
-        {!STUDIO_MODE && <p className="text-[14px] text-foreground/35 font-body mt-3">{ESTIMATE}</p>}
+        {!STUDIO_MODE && <p className="text-[14px] text-foreground/35 font-body mt-3">{waitLine}</p>}
 
         {/* Animated dots */}
         <div className="flex justify-center gap-1.5 mt-4">

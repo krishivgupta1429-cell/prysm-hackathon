@@ -169,7 +169,10 @@ async def collect_evidence(video_path: str, work_dir: str, progress: Callable[[s
             note("consensus", ev.consensus.status if ev.consensus else "error")
         elif ev.speech is not None:
             note("consensus", "skipped")
-        if ev.parts["music"] and prepared.wav:
+        if ev.parts["music"] and prepared.wav and not all(config.acr_credentials()):
+            note("music_id", "not_configured")   # the music service is really not set up: the screen shows "(skipped)"
+            ev.music = run_music_id(prepared.wav, duration, ev.signals or SignalsStage(), ev.audio or AudioStage(), run_dir)
+        elif ev.parts["music"] and prepared.wav:
             note("music_id", "running")
             ev.music = await _guard("music id", config.TIMEOUT_MUSIC_ID, lambda: run_music_id(
                 prepared.wav, duration, ev.signals or SignalsStage(), ev.audio or AudioStage(), run_dir), notes)
