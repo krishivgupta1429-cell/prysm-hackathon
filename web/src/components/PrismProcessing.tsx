@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { STUDIO_MODE } from '@/lib/config'
+import { STUDIO_MODE, ESTIMATE } from '@/lib/config'
 import { visibleStages, doneCount, stageState, type Progress } from '@/studio/progress'
 
 interface Props {
@@ -19,21 +19,12 @@ const FACTS = [
 ]
 
 export default function PrismProcessing({ status, progress }: Props) {
-  const [elapsed, setElapsed] = useState(0)
   const [factIdx, setFactIdx] = useState(0)
-
-  useEffect(() => {
-    const timer = setInterval(() => setElapsed(e => e + 1), 1000)
-    return () => clearInterval(timer)
-  }, [])
 
   useEffect(() => {
     const timer = setInterval(() => setFactIdx(i => (i + 1) % FACTS.length), 6000)
     return () => clearInterval(timer)
   }, [])
-
-  const minutes = Math.floor(elapsed / 60)
-  const seconds = elapsed % 60
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center px-6 relative overflow-hidden">
@@ -150,29 +141,19 @@ export default function PrismProcessing({ status, progress }: Props) {
                         : state === 'pending' ? <span className="w-1.5 h-1.5 rounded-full bg-foreground/15" />
                         : <span className="text-green-600/70">{state === 'done' ? '✓' : '–'}</span>}
                     </span>
-                    {st.label}
+                    {st.label}{state === 'skipped' ? ' (skipped)' : ''}
                   </li>
                 )
               })}
             </ul>
             <p className="text-[12px] text-foreground/30 font-body mt-5 text-center leading-relaxed">
-              Most analyses take 2–3 minutes. The first one can take longer while the signal models warm up.
+              {ESTIMATE}
             </p>
           </div>
         )}
 
-        {/* Time estimate (simulated, so not shown in demo mode where the real steps are listed) */}
-        {!STUDIO_MODE && <p className="text-[14px] text-foreground/35 font-body mt-3">
-          {elapsed < 10
-            ? 'This usually takes 2–3 minutes — sit tight'
-            : elapsed < 60
-            ? `Analysing your video — about ${Math.max(2 - Math.floor(elapsed / 60), 1)}–${Math.max(3 - Math.floor(elapsed / 60), 2)} min left`
-            : elapsed < 120
-            ? `Almost halfway — about ${Math.max(3 - Math.floor(elapsed / 60), 1)} min left`
-            : elapsed < 180
-            ? 'Wrapping up — just a little longer'
-            : 'Taking a bit longer than usual — hang tight'}
-        </p>}
+        {/* Time estimate for the normal site (demo mode shows the same line under the step list) */}
+        {!STUDIO_MODE && <p className="text-[14px] text-foreground/35 font-body mt-3">{ESTIMATE}</p>}
 
         {/* Animated dots */}
         <div className="flex justify-center gap-1.5 mt-4">

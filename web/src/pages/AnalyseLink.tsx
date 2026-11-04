@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { getUser, getToken, fetchUser } from '@/lib/auth'
 import { apiUrl, uploadUrl } from '@/lib/api'
 import { getNextPlan } from '@/lib/plans'
-import { STUDIO_MODE } from '@/lib/config'
+import { STUDIO_MODE, ESTIMATE } from '@/lib/config'
 import { currentLabel, type Progress } from '@/studio/progress'
 import PrismProcessing from '@/components/PrismProcessing'
 import OwnReelPicker from '@/studio/OwnReelPicker'   // hackathon: pick one of the connected Instagram reels
@@ -27,7 +27,6 @@ const PROCESSING_STEPS_COMPETITOR = [
 type Intent = 'competitor' | 'my_video'   // hackathon: 'my_video' = the creator's own posted reel (the baseline backend path for an own link)
 
 // Hackathon: shown next to the button. Measured on this pipeline: see docs/link-flow-notes.md
-const ESTIMATE = 'Usually takes 3 to 6 minutes. A longer reel can take up to 9.'
 
 export default function AnalyseLink() {
   const [step, setStep] = useState(1)

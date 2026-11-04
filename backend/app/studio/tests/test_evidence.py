@@ -149,3 +149,21 @@ def test_models_used_labels_meta_models_and_existing_models_correctly():
 def test_models_used_without_evidence_still_lists_the_core_models():
     rows = ev.models_used(None, whisper_ok=True, gemini_ok=True, acr_found=True, trends_ok=True)
     assert {"Muse Spark 1.3", "Groq Whisper large-v3-turbo", "Gemini 2.5 Pro", "ACRCloud"} <= {r["model"] for r in rows}
+
+
+# ---------------------------------------------------------------- the music step never stays grey
+
+def test_the_music_step_is_reported_as_skipped_when_no_evidence_part_runs(monkeypatch):
+    import asyncio
+    monkeypatch.setattr(ev.config, "get_env", lambda name: "0" if name in ev.FLAGS.values() else None)
+    seen = []
+    asyncio.run(ev.collect_evidence("/nonexistent.mp4", "/tmp", progress=lambda stage, status: seen.append((stage, status))))
+    assert ("music_id", "skipped") in seen
+
+
+def test_the_music_step_is_skipped_when_the_evidence_stops_early():
+    import asyncio
+    seen = []
+    # the file does not exist, so the evidence stops at the probe: the music step must still be closed out
+    asyncio.run(ev.collect_evidence("/nonexistent.mp4", "/tmp", progress=lambda stage, status: seen.append((stage, status))))
+    assert ("music_id", "skipped") in seen

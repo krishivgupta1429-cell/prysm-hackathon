@@ -92,14 +92,21 @@ async def collect_evidence(video_path: str, work_dir: str, progress: Callable[[s
     start = time.time()
     ev = Evidence(parts=enabled_parts())
     notes = ev.notes
+    noted: set[str] = set()
+
+    def note(stage, status):
+        noted.add(stage)
+        if progress:
+            progress(stage, status)
     if not any(ev.parts.values()):
+        note("music_id", "skipped")
         return ev
-    note = (lambda stage, status: progress(stage, status) if progress else None)
     try:
         video = Path(video_path)
         info = await asyncio.to_thread(media.probe, video)
         if info.duration_s > MAX_VIDEO_SECONDS + 0.5:
             notes.append(f"extra evidence skipped: video is {info.duration_s:.0f}s, longer than {MAX_VIDEO_SECONDS}s")
+            note("music_id", "skipped")
             return ev
         client = client or MetaClient()
         run_dir = Path(work_dir) / "evidence"
@@ -163,11 +170,15 @@ async def collect_evidence(video_path: str, work_dir: str, progress: Callable[[s
         elif ev.speech is not None:
             note("consensus", "skipped")
         if ev.parts["music"] and prepared.wav:
+            note("music_id", "running")
             ev.music = await _guard("music id", config.TIMEOUT_MUSIC_ID, lambda: run_music_id(
                 prepared.wav, duration, ev.signals or SignalsStage(), ev.audio or AudioStage(), run_dir), notes)
+            note("music_id", ev.music.status if ev.music else "error")
     except Exception as e:  # nothing here may break an analysis
         notes.append(f"extra evidence stopped: {type(e).__name__}: {config.redact(str(e))[:200]}")
         log.warning("[Evidence] stopped: %s", config.redact(str(e))[:200])
+    if "music_id" not in noted:   # not configured, no audio, or the evidence stopped early: show it as skipped, never stuck grey
+        note("music_id", "skipped")
     ev.ledger = list(client.ledger) if client else []
     ev.cost_usd = round(client.total_cost if client else 0.0, 6)
     ev.cost_usd += _signals_cost(ev.signals)
