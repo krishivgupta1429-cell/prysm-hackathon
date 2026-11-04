@@ -12,7 +12,8 @@ from sqlalchemy import select
 from app.studio import config
 from app.studio.instagram import dna as D
 from app.studio.instagram import grounding as G
-from app.studio.instagram.models import CreatorDna, IgAccount, IgReel
+from app.studio.instagram import metrics as M
+from app.studio.instagram.models import CreatorDna, IgAccount, IgReel, IgReelInsight
 
 log = logging.getLogger(__name__)
 COMPARE_FIELDS = (("hook_type", "Hook"), ("format", "Format"), ("pacing", "Pacing"), ("on_screen_text", "On-screen text"),
@@ -50,10 +51,16 @@ async def load(db, user_id) -> Optional[dict]:
     dna = (await db.execute(select(CreatorDna).where(CreatorDna.account_id == acct.id))).scalar_one_or_none()
     rows = (await db.execute(select(IgReel).where(IgReel.account_id == acct.id))).scalars().all()
     rows = sorted(rows, key=lambda r: r.posted_at.isoformat() if r.posted_at else "", reverse=True)
+    ins: dict = {}
+    if rows:
+        for i in (await db.execute(select(IgReelInsight).where(IgReelInsight.reel_id.in_([r.id for r in rows])))).scalars():
+            ins.setdefault(i.reel_id, {})[i.metric] = i.value if i.available else None
     reels = [{"n": i, "id": str(r.id), "media_id": r.media_id, "permalink": r.permalink, "posted_at": r.posted_at,
               "caption": r.caption, "duration_s": r.duration_s, "performance_index": r.performance_index,
               "performance_basis": r.performance_basis, "watch_through": r.watch_through, "fingerprint": r.fingerprint,
               "frames_used": r.frames_used, "note": r.note, "like_count": r.like_count, "comments_count": r.comments_count,
+              "thumbnail_url": r.thumbnail_url, "insights": {m: ins.get(r.id, {}).get(m) for m in M.METRICS},
+              "vs_usual": M.plain_vs_usual(r.performance_index, r.performance_basis),
               "analysis_level": level_of(r), "partial": level_of(r) != "full", "partial_reason": PARTIAL_REASON.get(level_of(r))}
              for i, r in enumerate(rows, 1)]
     return {"account": acct, "dna": dna, "reels": reels}

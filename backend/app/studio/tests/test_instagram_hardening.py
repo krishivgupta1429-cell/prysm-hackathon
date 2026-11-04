@@ -544,3 +544,67 @@ async def test_count_reels_counts_only_reels_in_one_call_and_stops_at_the_limit(
         lambda r: httpx.Response(200, json={"data": [{"id": "1", "media_type": "VIDEO", "media_product_type": "REELS"},
                                                       {"id": "2", "media_type": "IMAGE", "media_product_type": "FEED"}]}))))
     assert await few.count_reels(30) == (1, True)                                                  # the whole account has one reel
+
+
+# =================================================================== phase 2: plain language and real data
+
+def test_plain_language_for_the_performance_index():
+    from app.studio.instagram import metrics as M
+    assert M.plain_vs_usual(0.75, "reach")["label"] == "Reach 25% below your usual"
+    assert M.plain_vs_usual(1.25, "reach")["label"] == "Reach 25% above your usual"
+    assert M.plain_vs_usual(1.247, "reach")["label"] == "Reach 25% above your usual"
+    assert M.plain_vs_usual(1.02, "reach") == {"pct": 2, "direction": "same", "label": "Reach about your usual"}
+    assert M.plain_vs_usual(0.5, "views")["label"] == "Views 50% below your usual"
+    assert M.plain_vs_usual(None, "reach") is None
+
+
+@aio
+async def test_load_returns_every_real_metric_thumbnail_and_plain_language_per_reel():
+    async with dbf() as factory:
+        uid = await make_user(factory)
+        async with factory() as db:
+            acct = await oauth.save_connection(db, uid, token="t", ig_user_id="ig1", username="me", account_type="BUSINESS", expires_in=3600,
+                                               scopes="a", profile_picture_url="https://cdn.example/p.jpg")
+            r = IgReel(account_id=acct.id, media_id="m1", caption="hello", thumbnail_url="https://cdn.example/t.jpg", performance_index=0.75,
+                       performance_basis="reach", duration_s=20.0)
+            db.add(r)
+            await db.flush()
+            from app.studio.instagram.models import IgReelInsight
+            db.add(IgReelInsight(reel_id=r.id, metric="reach", value=463.0, available=True))
+            db.add(IgReelInsight(reel_id=r.id, metric="saved", value=0.0, available=True))          # a real zero stays 0
+            db.add(IgReelInsight(reel_id=r.id, metric="reels_skip_rate", value=None, available=False))
+            await db.commit()
+        async with factory() as db:
+            data = await personalise.load(db, uid)
+            x = data["reels"][0]
+            assert x["insights"]["reach"] == 463.0 and x["insights"]["saved"] == 0.0 and x["insights"]["reels_skip_rate"] is None
+            assert x["insights"]["views"] is None                                                       # never fetched: no data, not 0
+            assert x["thumbnail_url"] == "https://cdn.example/t.jpg" and x["vs_usual"]["label"] == "Reach 25% below your usual"
+            assert data["account"].profile_picture_url == "https://cdn.example/p.jpg"
+
+
+@aio
+async def test_import_keeps_the_thumbnail_link_and_the_profile_picture(monkeypatch):
+    async def fake_ask(content, max_tokens, spend, *, system=None):
+        spend.add(0.001)
+        return json.dumps({"hook_type": "question", "format": "talking_head", "pacing": "fast", "audio_type": "speech", "on_screen_text": True, "topic": "t"})
+    monkeypatch.setattr(D, "_ask", fake_ask)
+
+    class PicSource(FakeSource):
+        async def profile_picture(self):
+            return "https://cdn.example/me.jpg"
+    async with dbf() as factory:
+        uid = await make_user(factory)
+        async with factory() as db:
+            await oauth.save_connection(db, uid, token="tok", ig_user_id="ig1", username="me", account_type="BUSINESS", expires_in=3600, scopes="a", is_fixture=True)
+        await importer.run_import(redis=Redis(), session_factory=factory, user_id=uid, count=3, job_id="j", source=PicSource(3))
+        async with factory() as db:
+            acct = (await db.execute(select(IgAccount).where(IgAccount.user_id == uid))).scalar_one()
+            assert acct.profile_picture_url == "https://cdn.example/me.jpg"
+            assert {r.thumbnail_url for r in (await db.execute(select(IgReel).where(IgReel.account_id == acct.id))).scalars()} == {"t"}
+
+
+def test_real_skip_rate_is_a_percent_and_the_fixture_matches():
+    from app.studio.instagram import fixtures
+    vals = [fixtures._insights(i)["reels_skip_rate"] for i in range(1, 12)]
+    assert all(5 <= v <= 80 for v in vals)                          # percent like Instagram's 59.1, not a 0..1 fraction

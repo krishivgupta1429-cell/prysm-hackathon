@@ -33,10 +33,10 @@ _ARCH = {
 _REELS = [
     # arch, hook line, caption, dur, strength
     ("broll", "", "[FIXTURE] Sunday reset. No talking, just the vibe", 31, 0.2),
-    ("talk_q", "Why do your reels flop?", "[FIXTURE] Why do your reels flop? Three reasons", 22, 0.85),
+    ("talk_q", "Why do your reels flop?", "[FIXTURE] Why do your reels flop? Three reasons 🎯 Your reels aren’t flopping because you’re bad at content, they’re flopping because nobody told you what to fix. 👇 Drop ‘FIXME’ in the comments and I’ll send you the checklist.\n\n#reelsstrategy #creatortips", 22, 0.85),
     ("list", "3 mistakes killing your reach", "[FIXTURE] 3 mistakes killing your reach", 18, 0.8),
     ("vlog", "", "[FIXTURE] day in my life, part 4", 38, 0.15),
-    ("talk_q", "Stop doing this on camera", "[FIXTURE] Stop doing this on camera", 17, 0.75),
+    ("talk_q", "Stop doing this on camera", "[FIXTURE] Stop doing this on camera 🙅‍♀️ Three habits that make people scroll away in the first second 👀🔥 and what to do instead, with a before and after you can copy today.", 17, 0.75),
     ("broll", "", "[FIXTURE] morning light", 27, 0.25),
     ("list", "5 tools I use every day", "[FIXTURE] 5 tools I use every day", 24, 0.7),
     ("vlog", "", "[FIXTURE] weekend trip clips", 35, 0.3),
@@ -117,7 +117,7 @@ def _insights(idx: int) -> dict[str, Optional[float]]:
     out.update(reach=round(reach), views=round(views),
                likes=round(views * (0.02 + 0.06 * strength)), comments=round(views * 0.004 * (0.5 + strength)),
                shares=round(views * 0.006 * (0.3 + strength)), saved=round(views * 0.01 * (0.3 + strength)),
-               reels_skip_rate=round(max(0.05, 0.75 - 0.6 * strength + rnd.uniform(-0.04, 0.04)), 3))
+               reels_skip_rate=round(100 * max(0.05, 0.75 - 0.6 * strength + rnd.uniform(-0.04, 0.04)), 1))   # percent, like Instagram
     out["total_interactions"] = out["likes"] + out["comments"] + out["shares"] + out["saved"]
     if idx != 3:                    # reel 4: no watch-time metrics
         out["ig_reels_avg_watch_time"] = round(dur * watch_frac * 1000)
@@ -146,6 +146,9 @@ class FixtureSource:
                 "_fixture_index": i,
             })
         return out
+
+    async def profile_picture(self) -> Optional[str]:
+        return None
 
     async def count_reels(self, stop_at: int = 30) -> tuple[int, bool]:
         return N_FIXTURE, True

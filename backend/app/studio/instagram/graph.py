@@ -83,6 +83,14 @@ class InstagramSource:
             url, params = nxt, None   # the cursor URL already carries every parameter
         return reels
 
+    async def profile_picture(self) -> Optional[str]:
+        """The link to the profile picture (one small call at import time); None when Instagram does not return one."""
+        try:
+            r = await self._c.get(f"{GRAPH}/me", params={"fields": "profile_picture_url", "access_token": self._token})
+            return (r.json() or {}).get("profile_picture_url") if r.status_code == 200 else None
+        except (httpx.HTTPError, ValueError):
+            return None
+
     async def count_reels(self, stop_at: int = 30) -> tuple[int, bool]:
         """(reels found, complete). Cheap: pages of 100 with only the type fields, stops as soon as `stop_at` reels are seen
         (usually one call). complete=False means "at least this many"."""

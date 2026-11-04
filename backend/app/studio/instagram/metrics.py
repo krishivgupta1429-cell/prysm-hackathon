@@ -111,3 +111,15 @@ def blended_score(perf_index: Optional[float], wt: Optional[float], wt_median: O
     if wt is not None and wt_median:
         parts.append(wt / wt_median)
     return round(sum(parts) / len(parts), 3) if parts else None
+
+
+def plain_vs_usual(index: Optional[float], basis: Optional[str]) -> Optional[dict]:
+    """performance_index in plain words: 0.75 -> "Reach 25% below your usual". "Usual" is the median of the imported reels.
+    Within 5 percent either way it says "about your usual". None when there is no index."""
+    if index is None:
+        return None
+    what = "Views" if basis == "views" else "Reach"
+    pct = round((index - 1.0) * 100)
+    if abs(pct) < 5:
+        return {"pct": pct, "direction": "same", "label": f"{what} about your usual"}
+    return {"pct": pct, "direction": "above" if pct > 0 else "below", "label": f"{what} {abs(pct)}% {'above' if pct > 0 else 'below'} your usual"}

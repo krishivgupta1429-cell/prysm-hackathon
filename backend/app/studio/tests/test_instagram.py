@@ -423,6 +423,8 @@ async def dbf():
             await conn.run_sync(lambda sc: Base.metadata.create_all(sc, tables=[
                 User.__table__, IgAccount.__table__, IgReel.__table__, IgReelInsight.__table__, CreatorDna.__table__]))
             await conn.execute(text("ALTER TABLE ig_reel ADD COLUMN IF NOT EXISTS analysis_level VARCHAR(20)"))   # older throwaway database
+            await conn.execute(text("ALTER TABLE ig_reel ADD COLUMN IF NOT EXISTS thumbnail_url TEXT"))
+            await conn.execute(text("ALTER TABLE ig_account ADD COLUMN IF NOT EXISTS profile_picture_url TEXT"))
     except Exception as e:  # no database reachable
         pytest.skip(f"no test database: {type(e).__name__}")
     try:

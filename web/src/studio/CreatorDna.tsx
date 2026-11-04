@@ -1,140 +1,62 @@
 // Built during the Meta Global AI Developer Hackathon (new work).
-// Creator DNA page (/creator-dna): consent, connect, "how many reels" import with live progress, the DNA summary, the imported reels
-// with their index and watch-through, Re-import and Disconnect. Black-and-white, inline styles, mobile friendly.
-// Fixture (dev-only fake) data is always labelled so it can never pass for real.
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+// The Creator DNA page (/creator-dna): consent and connect, the connected account, import, the DNA, and every imported reel.
+// Uses the app's own look (cream background, General Sans / Manrope, border and primary tokens, shadcn components).
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { apiUrl } from '@/lib/api'
 import { authFetch, getToken } from '@/lib/auth'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { AccountCard } from './creator/AccountCard'
+import { Consent } from './creator/Consent'
+import { DnaCard } from './creator/DnaCard'
+import { ImportCard } from './creator/ImportCard'
+import { ReelCard } from './creator/ReelCard'
+import type { DnaResp, Job, Status } from './creator/types'
 
-type Status = {
-  configured: boolean
-  fixtureAvailable: boolean
-  connected: boolean
-  scopes: string[]
-  limits: { min: number; max: number; default: number }
-  account: null | {
-    username: string | null; isFixture: boolean; tokenExpiresAt: string | null; lastImportAt: string | null
-    lastImportRequested: number | null
-    lastImport: null | { imported: number; found: number; requested: number; missing_metrics: string[]; rate_limited: boolean; token_invalid: boolean; partial?: number }
-  }
-}
-type Claim = { claim: string; reels: number[] }
-type Fingerprint = { hook_type: string; format: string; pacing: string; audio_type: string; on_screen_text: boolean; topic: string }
-type Reel = {
-  n: number; id: string; permalink: string | null; postedAt: string | null; caption: string | null; duration_s: number | null
-  performance_index: number | null; performance_basis: string | null; watch_through: number | null; fingerprint: Fingerprint | null
-  frames_used: number; note: string | null
-  analysis_level?: 'full' | 'thumbnail_caption' | 'caption_only'; partial?: boolean; partial_reason?: string | null
-}
-type DnaResp = {
-  connected: boolean; isFixture?: boolean; username?: string
-  dna: null | {
-    summary: string; sampleSize: number; costUsd: number; model: string
-    data: { mode: string; reason?: string; strongest: Claim[]; weakest: Claim[]; keep: Claim[]; change: Claim[]; shared?: Claim[]; outlier?: boolean; grounding?: { checked: number; dropped: number; regenerated: boolean } }
-    metricsAvailable: Record<string, number>
-  }
-  reels: Reel[]; metricLabels: Record<string, string>
-}
-type Job = { status: 'running' | 'done' | 'error'; found?: number; requested: number; imported?: number; error?: string; progress: Record<string, string>
-  missing_metrics?: string[]; rate_limited?: boolean; cost_usd?: number; partial?: number }
-
-const page: CSSProperties = { minHeight: '100vh', background: '#fff', color: '#0a0a0a', fontFamily: 'system-ui, -apple-system, sans-serif' }
-const wrap: CSSProperties = { maxWidth: 780, margin: '0 auto', padding: '24px 16px 64px' }
-const card: CSSProperties = { border: '1px solid #e5e5e5', borderRadius: 16, padding: 20, background: '#fff', marginBottom: 16 }
-const h2: CSSProperties = { fontSize: 16, fontWeight: 700, margin: '0 0 8px' }
-const p: CSSProperties = { fontSize: 14, lineHeight: 1.55, color: '#404040', margin: '0 0 8px' }
-const small: CSSProperties = { fontSize: 12, color: '#737373', lineHeight: 1.45 }
-const btn: CSSProperties = { background: '#0a0a0a', color: '#fff', border: '1px solid #0a0a0a', borderRadius: 12, padding: '10px 18px', fontSize: 14, fontWeight: 700, cursor: 'pointer' }
-const btnGhost: CSSProperties = { ...btn, background: '#fff', color: '#0a0a0a', border: '1px solid #d4d4d4' }
-const chip: CSSProperties = { fontSize: 11, border: '1px solid #d4d4d4', borderRadius: 999, padding: '2px 8px', color: '#525252', whiteSpace: 'nowrap' }
-
-const pct = (v: number | null | undefined) => (v == null ? 'not available' : `${Math.round(v * 100)}%`)
-const idx = (v: number | null | undefined) => (v == null ? 'not available' : v.toFixed(2))
-const date = (s: string | null) => (s ? new Date(s).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '')
-const words = (s: string) => s.replace(/_/g, ' ')
-const known = (s: string | null | undefined) => !!s && s !== 'unknown'   // hook / pacing are "unknown" for reels read without their video
-
-function FixtureBanner() {
-  return (
-    <div data-testid="fixture-banner" style={{ background: '#0a0a0a', color: '#fff', borderRadius: 12, padding: '10px 14px', fontSize: 13, fontWeight: 600, marginBottom: 16 }}>
-      TEST DATA (development fixture). These reels are fake, generated on this computer. Nothing here comes from Instagram.
-    </div>
-  )
-}
-
-function Consent({ status, onConnect, busy, error }: { status: Status; onConnect: () => void; busy: boolean; error: string }) {
-  const available = status.configured || status.fixtureAvailable
-  return (
-    <div style={card} data-testid="consent">
-      <h2 style={h2}>Connect your Instagram to get your Creator DNA</h2>
-      <p style={p}>Prysm can read your own recent reels and what Instagram measured for them, find what your best and weakest reels have in common, and then compare every new video you analyse with your own patterns.</p>
-      <ul style={{ ...p, paddingLeft: 20 }}>
-        <li><b>What we read:</b> your own reels (link, date, caption, likes, comments) and their insights (reach, views, watch time, skip rate and similar). Only your account, nothing about other people.</li>
-        <li><b>What we store:</b> those numbers, a short fingerprint of each reel (hook, format, pacing) and your DNA summary. <b>We never store your videos.</b> A video is downloaded for a moment to cut about six frames and is deleted right after.</li>
-        <li><b>Who processes your frames:</b> the AI model provider (Meta, Muse Spark) receives those frames and the caption to write the fingerprint.</li>
-        <li><b>Deleting it:</b> Disconnect removes your Instagram token and every reel, insight and DNA we derived, at once. You can also remove Prysm in Instagram under Settings, Apps and websites.</li>
-        <li><b>Permissions asked:</b> {status.scopes.join(', ')}. Read only; Prysm cannot post or message for you.</li>
-      </ul>
-      <p style={small}>Needs a Business or Creator Instagram account. Signing in to Prysm stays with email or Google; this is an extra step.</p>
-      {!available && <p style={{ ...p, fontWeight: 600 }}>Instagram is not configured on this server yet, so connecting is unavailable.</p>}
-      {error && <p style={{ ...p, color: '#0a0a0a', fontWeight: 700 }} role="alert">{error}</p>}
-      <button style={{ ...btn, opacity: available && !busy ? 1 : 0.4 }} disabled={!available || busy} onClick={onConnect} data-testid="connect">
-        {status.fixtureAvailable ? 'Connect (test data, no Instagram)' : 'I understand, continue to Instagram'}
-      </button>
-    </div>
-  )
-}
-
-function ClaimList({ title, items }: { title: string; items: Claim[] }) {
-  if (!items?.length) return null
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#737373', marginBottom: 4 }}>{title}</div>
-      {items.map((c, i) => (
-        <p key={i} style={{ ...p, margin: '0 0 4px' }}>{c.claim} <span style={small}>(Reel{c.reels.length > 1 ? 's' : ''} {c.reels.join(', ')})</span></p>
-      ))}
-    </div>
-  )
-}
+const LABEL = 'text-[10px] font-bold tracking-widest uppercase text-foreground/30 font-body'
 
 export default function CreatorDna() {
   const navigate = useNavigate()
   const [sp, setSp] = useSearchParams()
   const [status, setStatus] = useState<Status | null>(null)
   const [dna, setDna] = useState<DnaResp | null>(null)
-  const [count, setCount] = useState(10)
   const [avail, setAvail] = useState<{ available: number | null; complete: boolean } | null>(null)
+  const [count, setCount] = useState(10)
   const [job, setJob] = useState<Job | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [confirmDisconnect, setConfirmDisconnect] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [openReel, setOpenReel] = useState<number | null>(null)
   const timer = useRef<number | null>(null)
+  const importRef = useRef<HTMLDivElement>(null)
+  const countSet = useRef(false)
 
   const load = useCallback(async () => {
-    const s = await authFetch(apiUrl('/instagram/status'))
-    if (!s.ok) { setError('Could not load your Instagram status.'); return }
-    const st: Status = await s.json()
-    setStatus(st)
-    if (st.connected) {
+    setLoadError('')
+    try {
+      const s = await authFetch(apiUrl('/instagram/status'))
+      if (!s.ok) throw new Error('status')
+      const st: Status = await s.json()
+      setStatus(st)
+      if (!st.connected) { setDna(null); return }
       const d = await authFetch(apiUrl('/instagram/dna'))
       if (d.ok) setDna(await d.json())
-      if (st.account?.lastImportRequested) setCount(st.account.lastImportRequested)
+      let mx = st.limits.max
       try {   // how many reels the account has (one cached Instagram call at most)
         const a = await authFetch(apiUrl('/instagram/available'))
-        if (a.ok) {
-          const av = await a.json()
-          setAvail(av)
-          const mx = Math.min(st.limits.max, av.available ?? st.limits.max)
-          setCount(c => Math.max(st.limits.min, Math.min(c, mx)))
-        }
+        if (a.ok) { const av = await a.json(); setAvail(av); mx = Math.min(st.limits.max, av.available ?? st.limits.max) }
       } catch { /* the plain maximum is offered */ }
-    } else setDna(null)
+      if (!countSet.current) {   // default: 10, or the most the account has when that is fewer
+        countSet.current = true
+        setCount(Math.max(st.limits.min, Math.min(st.limits.default, mx)))
+      } else setCount(c => Math.max(st.limits.min, Math.min(c, mx)))
+    } catch { setLoadError('Could not load your Instagram status. Check your connection and try again.') }
   }, [])
 
   useEffect(() => {
     if (!getToken()) { navigate('/login'); return }
-    setCount(10)
     load()
     return () => { if (timer.current) window.clearTimeout(timer.current) }
   }, [load, navigate])
@@ -151,7 +73,6 @@ export default function CreatorDna() {
       const r = await authFetch(apiUrl('/instagram/connect'), { method: 'POST' })
       const j = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(j.detail || 'Could not start the connection.')
-      if (j.fixture) { await load(); setBusy(false); return }
       window.location.href = j.url
     } catch (e: any) { setError(e.message || 'Could not start the connection.'); setBusy(false) }
   }
@@ -186,167 +107,117 @@ export default function CreatorDna() {
   async function disconnect() {
     setBusy(true)
     const r = await authFetch(apiUrl('/instagram/disconnect'), { method: 'DELETE' })
-    setBusy(false); setConfirmDisconnect(false)
-    if (r.ok) { setJob(null); setDna(null); await load() } else setError('Could not disconnect. Please try again.')
+    setBusy(false)
+    if (r.ok) { setJob(null); setDna(null); setAvail(null); countSet.current = false; await load() } else setError('Could not disconnect. Please try again.')
   }
 
-  if (!status) {
-    return <div style={page}><div style={wrap}><p style={p}>{error || 'Loading…'}</p></div></div>
-  }
+  const gotoImport = () => { importRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); window.setTimeout(() => importRef.current?.focus(), 350) }
 
-  const fixture = !!(dna?.isFixture || status.account?.isFixture)
-  const maxCount = Math.max(status.limits.min, Math.min(status.limits.max, avail?.available ?? status.limits.max))
-  const stages = job ? Object.entries(job.progress) : []
-  const total = job ? 2 + (job.found ?? job.requested) : 0
-  const done = stages.filter(([, v]) => v !== 'running').length
-  const running = stages.find(([, v]) => v === 'running')?.[0]
-  const label = running === 'fetch_reels' ? 'Finding your reels…' : running === 'creator_dna' ? 'Writing your Creator DNA…'
-    : running?.startsWith('reel_') ? `Reading reel ${parseInt(running.slice(5), 10)} of ${job?.found ?? job?.requested}…` : 'Working…'
-  const partialReels = (dna?.reels || []).filter(r => r.partial)
-  const lastMissing = (dna?.dna ? status.account?.lastImport?.missing_metrics : []) || []
+  const fixture = !!(dna?.isFixture || status?.account?.isFixture)
+  const reels = dna?.reels || []
+  const selected = reels.find(r => r.n === openReel) || null
+  const lastMissing = (dna?.dna ? status?.account?.lastImport?.missing_metrics : []) || []
+  const maxCount = status ? Math.max(status.limits.min, Math.min(status.limits.max, avail?.available ?? status.limits.max)) : 30
 
   return (
-    <div style={page}>
-      <div style={wrap}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Creator DNA</h1>
-          <span style={{ display: 'flex', gap: 14 }}>
-            <Link to="/analyse" style={{ ...small, color: '#0a0a0a' }}>Analyse a video</Link>
-            <Link to="/settings" style={{ ...small, color: '#0a0a0a' }}>Settings</Link>
-          </span>
-        </div>
-        {fixture && <FixtureBanner />}
-        {error && !(!status.connected) && <p style={{ ...p, fontWeight: 700 }} role="alert">{error}</p>}
+    <div className="min-h-screen bg-background text-foreground relative">
+      <div className="grain-overlay" aria-hidden="true" />
+      <nav className="border-b border-border px-4 sm:px-8 h-14 flex items-center justify-between sticky top-0 bg-background/90 backdrop-blur-md z-40">
+        <Link to="/" className="font-logo text-[18px] sm:text-[21px] text-foreground">PRYSM</Link>
+        <span className="flex items-center gap-5 text-sm font-body text-foreground/45">
+          <Link to="/analyse" className="hover:text-foreground/70 transition-colors">Analyse a video</Link>
+          <Link to="/settings" className="hover:text-foreground/70 transition-colors">Settings</Link>
+        </span>
+      </nav>
 
-        {!status.connected && <Consent status={status} onConnect={connect} busy={busy} error={error} />}
+      <main className="max-w-3xl mx-auto px-4 sm:px-5 py-8 sm:py-10 space-y-5">
+        <header>
+          <h1 className="font-display text-3xl font-black tracking-tight">Creator DNA</h1>
+          <p className="text-foreground/45 text-sm font-body mt-1">What your own reels show about what works for you, from the numbers Instagram measured.</p>
+        </header>
 
-        {status.connected && (
+        {fixture && (
+          <div data-testid="fixture-banner" className="rounded-xl bg-foreground text-background px-4 py-2.5 text-[13px] font-semibold font-body">
+            TEST DATA (development fixture). These reels are fake, generated on this computer. Nothing here comes from Instagram.
+          </div>
+        )}
+        {error && <p className="rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-[13px] font-bold text-destructive font-body" role="alert" data-testid="page-error">{error}</p>}
+
+        {loadError ? (
+          <div className="rounded-2xl border border-border p-5" data-testid="load-error">
+            <p className="text-[14px] font-body text-foreground/70">{loadError}</p>
+            <Button className="mt-3" variant="outline" onClick={load}>Try again</Button>
+          </div>
+        ) : !status ? (
+          <div className="space-y-4" data-testid="loading" aria-busy="true" aria-label="Loading">
+            <Skeleton className="h-20 w-full rounded-2xl" /><Skeleton className="h-48 w-full rounded-2xl" /><Skeleton className="h-64 w-full rounded-2xl" />
+          </div>
+        ) : !status.connected ? (
+          <Consent status={status} onConnect={connect} busy={busy} error="" />
+        ) : (
           <>
-            <div style={card} data-testid="import-card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                <h2 style={h2}>{status.account?.lastImportAt ? 'Re-import your reels' : 'Import your reels'}</h2>
-                <span style={chip}>{fixture ? 'test data' : `@${status.account?.username || 'connected'}`}</span>
-              </div>
-              <p style={p}>How many of your most recent reels should we import? More reels make the patterns steadier but cost a little more to process.</p>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '12px 0' }}>
-                <button style={btnGhost} aria-label="fewer reels" disabled={busy || count <= status.limits.min} onClick={() => setCount(c => Math.max(status.limits.min, c - 1))}>−</button>
-                <input type="range" aria-label="number of reels" min={status.limits.min} max={maxCount} value={Math.min(count, maxCount)} disabled={busy || maxCount <= status.limits.min}
-                  onChange={e => setCount(Number(e.target.value))} style={{ flex: '1 1 160px', accentColor: '#0a0a0a' }} data-testid="count" />
-                <button style={btnGhost} aria-label="more reels" disabled={busy || count >= maxCount} onClick={() => setCount(c => Math.min(maxCount, c + 1))}>+</button>
-                <input type="number" aria-label="type a number of reels" min={status.limits.min} max={maxCount} value={count} disabled={busy} data-testid="count-input"
-                  onChange={e => { const n = parseInt(e.target.value, 10); if (!Number.isNaN(n)) setCount(Math.max(status.limits.min, Math.min(maxCount, n))) }}
-                  style={{ width: 64, padding: '6px 8px', border: '1px solid #d4d4d4', borderRadius: 8, fontSize: 16, textAlign: 'center' }} />
-                <b style={{ fontSize: 20, minWidth: 28, textAlign: 'center' }} data-testid="count-value">{count}</b>
-              </div>
-              {avail?.available != null && <p style={small} data-testid="available">You have {avail.complete ? avail.available : `${avail.available} or more`} reel{avail.available === 1 && avail.complete ? '' : 's'} available{!avail.complete ? ` (the most you can import at once is ${status.limits.max})` : ''}.</p>}
-              {fixture && count > 12 && <p style={small}>The test fixture only has 12 reels.</p>}
-              <button style={{ ...btn, opacity: busy ? 0.5 : 1 }} disabled={busy} onClick={startImport} data-testid="import">
-                {busy ? 'Importing…' : status.account?.lastImportAt ? 'Re-import' : 'Import'}
-              </button>
+            <AccountCard username={status.account?.username ?? null} pictureUrl={dna?.profilePictureUrl ?? status.account?.profilePictureUrl} fixture={fixture}
+              lastImportAt={status.account?.lastImportAt} imported={status.account?.lastImport?.imported} busy={busy} onReimport={gotoImport} onDisconnect={disconnect} />
 
-              {job && job.status === 'running' && (
-                <div style={{ marginTop: 16 }} data-testid="progress">
-                  <div style={{ height: 8, background: '#f0f0f0', borderRadius: 999, overflow: 'hidden' }}>
-                    <div style={{ width: `${Math.min(100, (done / Math.max(1, total)) * 100)}%`, height: '100%', background: '#0a0a0a', transition: 'width .4s' }} />
-                  </div>
-                  <p style={{ ...small, marginTop: 6 }}>{label} ({done} of {total} steps)</p>
-                </div>
-              )}
-              {job && job.status === 'done' && (
-                <p style={{ ...p, marginTop: 14 }} data-testid="import-result">
-                  Imported {job.imported} of {job.requested} requested reels.
-                  {(job.found ?? 0) < job.requested && ' Your account has fewer reels than requested.'}
-                  {!!job.partial && ` ${job.partial} of them had no video file from Instagram (often licensed audio), so ${job.partial === 1 ? 'it was' : 'they were'} read from the thumbnail and caption only and ${job.partial === 1 ? 'is' : 'are'} not fully analysed.`}
-                  {job.rate_limited && ' Instagram\'s rate limit was reached, so some reels have no insights.'}
-                </p>
-              )}
-              {job && job.status === 'error' && <p style={{ ...p, fontWeight: 700 }} role="alert">{job.error}</p>}
-            </div>
+            <ImportCard ref={importRef} count={count} setCount={setCount} min={status.limits.min} max={maxCount} available={avail} busy={busy}
+              hasImport={!!status.account?.lastImportAt} job={job} fixture={fixture} onStart={startImport} />
 
             {dna?.dna && dna.dna.data.mode === 'breakdown' && (
-              <div style={card} data-testid="breakdown-note">
-                <h2 style={h2}>Your reels, one by one</h2>
-                <p style={p}>Patterns need at least 3 reels. With {dna.dna.sampleSize} reel{dna.dna.sampleSize === 1 ? '' : 's'} you get the breakdown of each reel below, and no pattern claims. Import more reels to see what they share.</p>
+              <div className="rounded-2xl border border-border bg-background p-5" data-testid="breakdown-note">
+                <p className={LABEL}>Creator DNA</p>
+                <h2 className="font-display text-xl font-black tracking-tight">Patterns need at least 3 reels</h2>
+                <p className="mt-1 text-[14px] text-foreground/60 font-body">
+                  You imported {dna.dna.sampleSize} reel{dna.dna.sampleSize === 1 ? '' : 's'}, so below is the breakdown of {dna.dna.sampleSize === 1 ? 'it' : 'each one'} and no pattern claims. Import 3 or more reels to see what they share.
+                </p>
               </div>
             )}
             {dna?.dna && dna.dna.data.mode !== 'breakdown' && (
-              <div style={card} data-testid="dna">
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                  <h2 style={h2}>Your Creator DNA</h2>
-                  <span style={chip}>{dna.dna.sampleSize} reels{fixture ? ' · test data' : ''}</span>
-                </div>
-                {dna.dna.summary.split('\n\n').map((t, i) => <p key={i} style={p}>{t}</p>)}
-                <ClaimList title="What your strongest reels share" items={dna.dna.data.strongest} />
-                <ClaimList title="What repeats in your weakest" items={dna.dna.data.weakest} />
-                <ClaimList title="Keep" items={dna.dna.data.keep} />
-                <ClaimList title="Change" items={dna.dna.data.change} />
-                <ClaimList title="Seen in these reels" items={dna.dna.data.shared || []} />
-                {partialReels.length > 0 && (
-                  <div style={{ border: '1px dashed #0a0a0a', borderRadius: 12, padding: '10px 12px', margin: '12px 0' }} data-testid="partial-notice">
-                    <p style={{ ...p, margin: 0, fontWeight: 700 }}>Not fully analysed: {partialReels.map(r => `Reel ${r.n}`).join(', ')}</p>
-                    <p style={{ ...small, marginTop: 4 }}>
-                      Instagram gave no video file for {partialReels.length === 1 ? 'this reel' : 'these reels'} (often licensed audio), so {partialReels.length === 1 ? 'it was' : 'they were'} read
-                      from the thumbnail and caption only. {partialReels.length === 1 ? 'It has' : 'They have'} no watch-through, and {partialReels.length === 1 ? 'its' : 'their'} hook,
-                      format and pacing were not judged. The patterns above rest on the other {dna.reels.length - partialReels.length} reels for those.
-                    </p>
-                  </div>
-                )}
-                {!!dna.dna.data.grounding?.dropped && (
-                  <p style={small} data-testid="grounding-note">{dna.dna.data.grounding.dropped} point{dna.dna.data.grounding.dropped === 1 ? '' : 's'} the checker could not back with your reels {dna.dna.data.grounding.dropped === 1 ? 'was' : 'were'} left out. Every point shown names the reels it comes from.</p>
-                )}
-                {lastMissing.length > 0 && (
-                  <p style={small} data-testid="missing">Instagram returned nothing for: {lastMissing.map(m => dna.metricLabels[m] || m).join(', ')}. The patterns use the metrics that were available.</p>
-                )}
-                <p style={small}>Medians are used so one standout reel does not define your normal. Fingerprints were written by {dna.dna.model}.</p>
+              <DnaCard dna={dna.dna} reels={reels} fixture={fixture} missing={lastMissing} metricLabels={dna.metricLabels} onOpen={setOpenReel} />
+            )}
+
+            {status.account?.lastImportAt && reels.length === 0 && !busy && (
+              <div className="rounded-2xl border border-dashed border-border p-6 text-center" data-testid="empty-reels">
+                <p className="font-display text-lg font-black tracking-tight">No reels came through</p>
+                <p className="text-[13px] text-foreground/55 font-body mt-1">Instagram returned no reels for this account. Post a reel, or check that this is the right account, then import again.</p>
+              </div>
+            )}
+            {!status.account?.lastImportAt && !busy && (
+              <div className="rounded-2xl border border-dashed border-border p-6 text-center" data-testid="empty-import">
+                <p className="font-display text-lg font-black tracking-tight">Nothing imported yet</p>
+                <p className="text-[13px] text-foreground/55 font-body mt-1">Choose how many reels to read above and press Import.</p>
               </div>
             )}
 
-            {dna && dna.reels.length > 0 && (
-              <div style={card} data-testid="reels">
-                <h2 style={h2}>Imported reels</h2>
-                {partialReels.length > 0 && <p style={{ ...small, fontWeight: 700, color: '#0a0a0a' }} data-testid="analysed-count">{dna.reels.length - partialReels.length} of {dna.reels.length} reels fully analysed from video; {partialReels.length} from thumbnail and caption only.</p>}
-                <p style={small}>Index: reach (or views if reach is missing) compared with your own median, so 1.00 is a typical reel of yours. Watch-through: average watch time divided by the reel's length.</p>
-                <div style={{ marginTop: 8 }}>
-                  {dna.reels.map(r => (
-                    <div key={r.id} style={{ borderTop: '1px solid #eee', padding: '12px 0' }} data-testid="reel-row">
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
-                        <b style={{ fontSize: 14 }}>Reel {r.n} <span style={{ ...small, fontWeight: 400 }}>{date(r.postedAt)}{r.duration_s ? ` · ${Math.round(r.duration_s)} s` : ''}</span></b>
-                        <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                          {fixture && <span style={{ ...chip, background: '#0a0a0a', color: '#fff', borderColor: '#0a0a0a' }}>FIXTURE</span>}
-                          <span style={chip}>index {idx(r.performance_index)}{r.performance_basis && r.performance_index != null ? ` (${r.performance_basis})` : ''}</span>
-                          {r.partial && <span style={{ ...chip, border: '1px dashed #0a0a0a', color: '#0a0a0a', fontWeight: 700 }} data-testid="partial-badge">{r.analysis_level === 'caption_only' ? 'CAPTION ONLY' : 'THUMBNAIL + CAPTION ONLY'} · NOT FULLY ANALYSED</span>}
-                          <span style={chip}>{r.partial ? 'watch-through: none (no video)' : `watch-through ${pct(r.watch_through)}`}</span>
-                        </span>
-                      </div>
-                      <p style={{ ...p, margin: '4px 0' }}>{(r.caption || '').slice(0, 140) || 'No caption'}</p>
-                      {r.fingerprint && (
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '4px 0' }}>
-                          {([known(r.fingerprint.hook_type) && words(r.fingerprint.hook_type), known(r.fingerprint.format) && words(r.fingerprint.format), known(r.fingerprint.pacing) && `${r.fingerprint.pacing} pace`, r.fingerprint.on_screen_text ? 'on-screen text' : 'no on-screen text', r.fingerprint.topic].filter(Boolean) as string[]).map((t, i) => <span key={i} style={chip}>{t}</span>)}
-                        </div>
-                      )}
-                      {r.partial && r.partial_reason ? <p style={{ ...small, color: '#0a0a0a' }} data-testid="partial-reason">{r.partial_reason}</p> : r.note && <p style={small}>{r.note}</p>}
-                      {r.permalink && !fixture && <a href={r.permalink} target="_blank" rel="noreferrer" style={{ ...small, color: '#0a0a0a' }}>Open on Instagram</a>}
-                    </div>
-                  ))}
+            {reels.length > 0 && (
+              <section data-testid="reels" aria-labelledby="reels-h">
+                <div className="flex items-end justify-between gap-2 flex-wrap">
+                  <div><p className={LABEL}>Imported</p><h2 id="reels-h" className="font-display text-xl font-black tracking-tight">Your reels</h2></div>
+                  {dna?.dna && reels.some(r => r.partial) && (
+                    <p className="text-[12px] font-bold font-body" data-testid="analysed-count">{reels.filter(r => !r.partial).length} of {reels.length} reels fully analysed from video; {reels.filter(r => r.partial).length} from thumbnail and caption only.</p>
+                  )}
                 </div>
-              </div>
+                <p className="mt-1 mb-3 text-[12px] text-foreground/45 font-body leading-relaxed" data-testid="vs-note">
+                  &ldquo;Above or below your usual&rdquo; compares a reel&rsquo;s reach (or views, when reach is missing) with the median of the {reels.length} reel{reels.length === 1 ? '' : 's'} you imported.
+                  With few reels it is a rough guide, not proof. Watch-through is average watch time divided by the reel&rsquo;s length.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {reels.map(r => <ReelCard key={r.id} reel={r} fixture={fixture} onOpen={setOpenReel} />)}
+                </div>
+              </section>
             )}
-
-            <div style={{ ...card, borderColor: '#d4d4d4' }}>
-              <h2 style={h2}>Disconnect</h2>
-              <p style={p}>This deletes your Instagram token and every reel, insight and Creator DNA stored for you. Your Prysm analyses are not touched.</p>
-              {!confirmDisconnect ? (
-                <button style={btnGhost} onClick={() => setConfirmDisconnect(true)} disabled={busy} data-testid="disconnect">Disconnect Instagram</button>
-              ) : (
-                <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button style={btn} onClick={disconnect} disabled={busy} data-testid="disconnect-confirm">Yes, delete everything</button>
-                  <button style={btnGhost} onClick={() => setConfirmDisconnect(false)}>Cancel</button>
-                </span>
-              )}
-            </div>
           </>
         )}
-      </div>
+      </main>
+
+      <Dialog open={selected != null} onOpenChange={o => { if (!o) setOpenReel(null) }}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto font-body" data-testid="reel-dialog">
+          <DialogHeader>
+            <DialogTitle className="font-display">Reel {selected?.n}</DialogTitle>
+            <DialogDescription className="sr-only">Details of this reel</DialogDescription>
+          </DialogHeader>
+          {selected && <ReelCard reel={selected} fixture={fixture} detail />}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

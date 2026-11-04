@@ -54,6 +54,23 @@ async def _source_for(db, user: User, request: Request):
 
 # ------------------------------------------------------------------ JSON API
 
+def _thumb_url(acct, url: Optional[str]) -> Optional[str]:
+    """Fixture thumbnails are served by this router (generated, no real image); real ones are Instagram's own links."""
+    if url and url.startswith("fixture://thumb/"):
+        return f"/instagram/fixture-thumb/{url.rsplit('/', 1)[1]}" if acct.is_fixture else None
+    return url
+
+
+@router.get("/fixture-thumb/{i}")
+async def fixture_thumb(i: int, request: Request):
+    """A generated thumbnail for the development fixture (the <img> tag cannot send a token, and nothing here is real data)."""
+    from fastapi.responses import Response
+    if not oauth.fixture_enabled(_host(request)) or not (0 <= i < fixtures.N_FIXTURE):
+        raise HTTPException(404, "Not found.")
+    return Response(await fixtures.FixtureSource().thumbnail({"_fixture_index": i}), media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
 @router.get("/status")
 async def status(request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     acct = await oauth.get_account(db, user.id)
@@ -63,6 +80,7 @@ async def status(request: Request, user: User = Depends(get_current_user), db: A
         "connected": acct is not None,
         "account": None if acct is None else {
             "username": acct.username, "isFixture": bool(acct.is_fixture), "accountType": acct.account_type,
+            "profilePictureUrl": acct.profile_picture_url,
             "tokenExpiresAt": _iso(acct.token_expires_at), "lastImportAt": _iso(acct.last_import_at),
             "lastImportRequested": acct.last_import_requested, "lastImport": acct.last_import_summary},
         "limits": {"min": importer.MIN_COUNT, "max": importer.MAX_COUNT, "default": importer.DEFAULT_COUNT},
@@ -167,10 +185,10 @@ async def creator_dna(user: User = Depends(get_current_user), db: AsyncSession =
     if data is None:
         return {"connected": False}
     acct, row = data["account"], data["dna"]
-    reels = [{**{k: v for k, v in r.items() if k not in ("id", "posted_at")}, "id": r["id"], "postedAt": _iso(r["posted_at"])}
-             for r in data["reels"]]
+    reels = [{**{k: v for k, v in r.items() if k not in ("id", "posted_at", "thumbnail_url")}, "id": r["id"], "postedAt": _iso(r["posted_at"]),
+              "thumbnailUrl": _thumb_url(acct, r["thumbnail_url"])} for r in data["reels"]]
     return {
-        "connected": True, "isFixture": bool(acct.is_fixture), "username": acct.username,
+        "connected": True, "isFixture": bool(acct.is_fixture), "username": acct.username, "profilePictureUrl": acct.profile_picture_url,
         "lastImport": acct.last_import_summary, "lastImportAt": _iso(acct.last_import_at),
         "dna": None if row is None else {"summary": row.summary, "data": row.dna, "sampleSize": row.sample_size,
                                          "metricsAvailable": row.metrics_available, "medians": row.medians,

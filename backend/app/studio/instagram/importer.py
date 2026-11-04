@@ -86,7 +86,7 @@ async def _one_reel(src, raw: dict, idx: int, spend: D.Spend, sem: asyncio.Semap
     async with sem:
         progress(stage, "running")
         rec: dict[str, Any] = {
-            "media_id": raw["id"], "permalink": raw.get("permalink"), "caption": raw.get("caption"),
+            "media_id": raw["id"], "permalink": raw.get("permalink"), "caption": raw.get("caption"), "thumbnail_url": raw.get("thumbnail_url"),
             "posted_at": _parse_ts(raw.get("timestamp")), "like_count": raw.get("like_count"),
             "comments_count": raw.get("comments_count"), "duration_s": None, "frames_used": 0, "fingerprint": None,
             "note": None, "insights": {m: None for m in M.METRICS}, "analysis_level": "full",
@@ -163,6 +163,10 @@ async def run_import(*, redis, session_factory, user_id: str, count: int, job_id
     try:
         progress("fetch_reels", "running")
         raws = await source.list_reels(count)
+        try:
+            pic = await source.profile_picture()
+        except Exception:
+            pic = None
         progress("fetch_reels", "ok")
         await _job_write(redis, job_id, found=len(raws))
         sem = asyncio.Semaphore(CONCURRENCY)
@@ -182,6 +186,8 @@ async def run_import(*, redis, session_factory, user_id: str, count: int, job_id
             acct = (await db.execute(select(IgAccount).where(IgAccount.user_id == user_id))).scalar_one_or_none()
             if acct is None:   # disconnected while importing: write nothing
                 raise RuntimeError("account was disconnected during the import")
+            if pic:
+                acct.profile_picture_url = pic
             await _replace_data(db, acct, recs, built, agg, spend, len(raws), count, state)
             await db.commit()
         if record_spend and spend.usd:
@@ -220,7 +226,7 @@ async def _replace_data(db, acct: IgAccount, recs: list[dict], built: dict | Non
     await db.execute(delete(CreatorDna).where(CreatorDna.account_id == acct.id))
     await db.flush()
     for r in recs:
-        reel = IgReel(account_id=acct.id, media_id=r["media_id"], permalink=r["permalink"], posted_at=r["posted_at"],
+        reel = IgReel(account_id=acct.id, media_id=r["media_id"], permalink=r["permalink"], thumbnail_url=r.get("thumbnail_url"), posted_at=r["posted_at"],
                       caption=r["caption"], duration_s=r["duration_s"], like_count=r["like_count"],
                       comments_count=r["comments_count"], frames_used=r["frames_used"], analysis_level=r.get("analysis_level"),
                       performance_index=r.get("performance_index"), performance_basis=r.get("performance_basis"),

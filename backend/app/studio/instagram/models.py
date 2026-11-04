@@ -24,6 +24,7 @@ class IgAccount(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
     ig_user_id = Column(String(50), nullable=False)
     username = Column(String(100))
+    profile_picture_url = Column(Text)                # a link Instagram serves (may expire); no image is stored
     account_type = Column(String(30))                 # BUSINESS / MEDIA_CREATOR when Instagram says so
     is_fixture = Column(Boolean, nullable=False, default=False)   # dev-only fake data: must never pass for real
     scopes = Column(String(300))
@@ -43,6 +44,7 @@ class IgReel(Base):
     account_id = Column(UUID(as_uuid=True), ForeignKey("ig_account.id", ondelete="CASCADE"), nullable=False, index=True)
     media_id = Column(String(60), nullable=False)
     permalink = Column(Text)
+    thumbnail_url = Column(Text)                      # a link Instagram serves (may expire); no image is stored
     posted_at = Column(DateTime(timezone=True))
     caption = Column(Text)
     duration_s = Column(Float)                        # measured from the downloaded file; NULL when the video was not available

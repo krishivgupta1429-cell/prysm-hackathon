@@ -173,7 +173,7 @@ async def fetch_profile(token: str, client: httpx.AsyncClient | None = None) -> 
     own = client is None
     client = client or httpx.AsyncClient(timeout=20)
     try:
-        r = await client.get(f"{GRAPH}/me", params={"fields": "id,user_id,username,account_type", "access_token": token})
+        r = await client.get(f"{GRAPH}/me", params={"fields": "id,user_id,username,account_type,profile_picture_url", "access_token": token})
     finally:
         if own:
             await client.aclose()
@@ -193,7 +193,7 @@ async def get_account(db, user_id) -> IgAccount | None:
 
 
 async def save_connection(db, user_id, *, token: str, ig_user_id: str, username: str | None, account_type: str | None,
-                          expires_in: int, scopes: str, is_fixture: bool = False) -> IgAccount:
+                          expires_in: int, scopes: str, is_fixture: bool = False, profile_picture_url: str | None = None) -> IgAccount:
     """Store the token where the baseline stores it (users columns) and the bookkeeping in ig_account.
     A different Instagram account than before replaces the old one: its derived data is deleted first."""
     from app.models.user import User
@@ -208,10 +208,12 @@ async def save_connection(db, user_id, *, token: str, ig_user_id: str, username:
     expires = _now() + timedelta(seconds=expires_in)
     if acct is None:
         acct = IgAccount(user_id=user_id, ig_user_id=ig_user_id, username=username, account_type=account_type,
-                         is_fixture=is_fixture, scopes=scopes, token_expires_at=expires, token_refreshed_at=_now())
+                         is_fixture=is_fixture, scopes=scopes, token_expires_at=expires, token_refreshed_at=_now(),
+                         profile_picture_url=profile_picture_url)
         db.add(acct)
     else:
         acct.username, acct.account_type, acct.scopes = username, account_type, scopes
+        acct.profile_picture_url = profile_picture_url or acct.profile_picture_url
         acct.token_expires_at, acct.token_refreshed_at = expires, _now()
     await db.commit()
     return acct
@@ -230,7 +232,7 @@ async def complete_connection(db, redis, *, code: str | None, state: str | None,
     prof = await fetch_profile(long_token, client)
     await save_connection(db, user_id, token=long_token, ig_user_id=str(prof.get("user_id") or prof.get("id") or got["user_id"]),
                           username=prof.get("username"), account_type=prof.get("account_type"),
-                          expires_in=expires_in, scopes=",".join(SCOPES))
+                          expires_in=expires_in, scopes=",".join(SCOPES), profile_picture_url=prof.get("profile_picture_url"))
     return user_id
 
 
