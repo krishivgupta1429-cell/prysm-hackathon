@@ -211,6 +211,10 @@ if settings.DEV_BAKEOFF:  # hackathon, local only: the founder's blind bake-off 
     from app.studio import dev_bakeoff
     app.include_router(dev_bakeoff.router)
 
+if settings.DEV_DINO:  # hackathon, dev only: DINOv2 curve / render check / own-reel matching (never mounted unless the flag is on)
+    from app.studio.dino import router as dino_router
+    app.include_router(dino_router.router)
+
 
 # ── Security headers ─────────────────────────────────────────────────────────
 

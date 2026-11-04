@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     AI_PROVIDER: str = ""                      # "meta": every Claude call is served by Muse Spark through app/studio/meta_llm_shim.py
     STUDIO_EXPOSE_COST: bool = False           # local testing: the owner may fetch the per-analysis cost breakdown (the founder email always may); never set in a public deployment
     DEV_BAKEOFF: bool = False                  # local only: mount /dev/bakeoff (saved blind bake-off variants for the founder's review page); never set in a deployment
+    DEV_DINO: bool = False                     # dev only: mount /dino/* (DINOv2 visual-change curve, render check, own-reel matching; needs login). DINO_BACKEND / DINO_MODAL_URL / DINO_MODAL_TOKEN are read from .env by app/studio/dino/client.py
     COACH_STYLE: bool = True                   # hackathon: append app/studio/coach_style.md to the two scoring prompts as an addendum (default on; only used with AI_PROVIDER=meta; COACH_STYLE=0 turns it off)
     STEP_REGENERATE: bool = True               # hackathon: regenerate the steps of any parameter that fails the step check (fewer than 3 steps, fallback first, no ready-to-say line); STEP_REGENERATE=0 turns it off
     DEBUG_SAVE_INPUTS: bool = False            # hackathon: save the exact inputs of the scoring calls once per analysis (samples/_local/scoring_inputs) for scripts/rescore.py

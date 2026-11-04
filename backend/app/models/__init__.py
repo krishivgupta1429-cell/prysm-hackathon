@@ -14,3 +14,4 @@ from app.models.intelligence import (                                # noqa: F40
     TimelineFeedback,
 )
 from app.models.research_reel import ResearchReel                    # noqa: F401
+from app.models.dino_embedding import ReelVisualEmbedding, AnalysisVisualEmbedding  # noqa: F401  (hackathon: DINOv2 tables)
