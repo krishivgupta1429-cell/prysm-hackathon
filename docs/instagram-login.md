@@ -21,7 +21,7 @@ The baseline already had an Instagram connection in `backend/app/routers/auth.py
 * Scopes cut to the two needed: `instagram_business_basic` and `instagram_business_manage_insights`.
 * The state is validated first and consumed once (`GETDEL`) before anything is exchanged.
 * The token is stored exactly where the baseline stored it. The expiry and refresh bookkeeping live in a new table (`ig_account`), not on `users`.
-* A consent screen (`/creator-dna`) comes before the redirect, and Disconnect deletes the token **and** every derived row.
+* A short connect page (`/creator-dna`: headline, three benefits, one "Connect Instagram" button, "Read-only access. Disconnect anytime.") comes before the redirect. The data and deletion details are on the Privacy page (section 4), not on this page. Disconnect deletes the token **and** every derived row.
 * Instagram is a **connect** step after login. Sign-up and login stay email and Google.
 * The token is **encrypted at rest** (Fernet, `TOKEN_ENCRYPTION_KEY`), see section 5.
 * Every claim in the Creator DNA and every sentence of a personalised answer that talks about the creator's reels is **checked against the imported reels** and rewritten once or dropped, see section 5.

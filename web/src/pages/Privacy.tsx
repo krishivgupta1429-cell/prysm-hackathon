@@ -69,6 +69,13 @@ export default function Privacy() {
             <li><strong className="text-foreground/80">Analysis results</strong> — stored in your account history</li>
             <li><strong className="text-foreground/80">Uploaded videos</strong> — processed and permanently deleted within minutes</li>
             <li><strong className="text-foreground/80">Instagram videos (link analysis)</strong> — downloaded, processed, and deleted within minutes</li>
+            {STUDIO_MODE && <>
+              <li><strong className="text-foreground/80">Instagram connection (Creator DNA), what we read</strong> — your own reels (link, date, caption, likes, comments) and their insights (reach, views, watch time, skip rate and similar). Only your account, nothing about other people.</li>
+              <li><strong className="text-foreground/80">Instagram connection, what we store</strong> — those numbers, a short fingerprint of each reel (hook, format, pacing), the first few spoken words of each reel, and your DNA summary. We never store your videos. A video is downloaded for a moment to cut about six frames and the first seconds of audio, and is deleted straight after.</li>
+              <li><strong className="text-foreground/80">Instagram connection, who processes your frames</strong> — the AI model provider (Meta, Muse Spark) receives those frames, the caption and the first seconds of speech to write the fingerprint.</li>
+              <li><strong className="text-foreground/80">Instagram connection, deleting it</strong> — Disconnect (on the Creator DNA page) removes your Instagram token and every reel, insight and DNA we derived, at once. You can also remove Prysm in Instagram under Settings, Apps and websites.</li>
+              <li><strong className="text-foreground/80">Instagram connection, permissions asked</strong> — instagram_business_basic, instagram_business_manage_insights. Read only; Prysm cannot post or message for you.</li>
+            </>}
           </ul>
         </section>
 

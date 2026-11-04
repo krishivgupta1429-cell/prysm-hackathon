@@ -35,12 +35,11 @@ const noOverflow = async (label) => { const o = await page.evaluate(() => docume
 await page.goto(`${BASE}/creator-dna`)
 await page.waitForSelector('[data-testid=consent]')
 const consent = await page.textContent('[data-testid=consent]')
-check('consent: says what is read', /own reels/.test(consent) && /insights/.test(consent))
-check('consent: never stores videos', /never store your videos/.test(consent))
-check('consent: deleted on disconnect', /Disconnect removes/.test(consent))
-check('consent: AI provider processes frames', /AI model provider/.test(consent) && /frames/.test(consent))
-check('consent: says the first spoken words are read', /first few spoken words/.test(consent))
-check('consent: names the two scopes only', /instagram_business_basic, instagram_business_manage_insights/.test(consent))
+check('consent: headline, one value sentence, three benefits, one button, one muted line',
+  /See what actually works in your own reels, based on the numbers Instagram measured\./.test(consent) && (await page.locator('[data-testid=benefits] li').count()) === 3
+  && (await page.locator('[data-testid=consent] button').count()) === 1 && /Read-only access\. Disconnect anytime\./.test(consent))
+check('consent: the old privacy bullets and the account note are gone',
+  !/What we read|What we store|Who processes|Deleting it|Permissions asked|downloaded for a moment|Business or Creator Instagram account|I understand|checkbox/i.test(consent))
 await shot('01-consent')
 
 // 2. connect (fixture): account card, import card, limits

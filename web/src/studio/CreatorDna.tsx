@@ -65,7 +65,7 @@ export default function CreatorDna() {
 
   useEffect(() => {
     const r = sp.get('instagram')
-    if (r === 'error') setError('Instagram did not complete the connection. Nothing was stored. Please try again.')
+    if (r === 'error') setError('Instagram did not complete the connection. If your account is personal, switch to a Creator or Business account in Instagram settings, then try again.')
     if (r) { sp.delete('instagram'); setSp(sp, { replace: true }) }
   }, [sp, setSp])
 
@@ -74,6 +74,7 @@ export default function CreatorDna() {
     try {
       const r = await authFetch(apiUrl('/instagram/connect'), { method: 'POST' })
       const j = await r.json().catch(() => ({}))
+      if (r.status === 503) throw new Error('Connecting Instagram is not available right now. Please try again later.')
       if (!r.ok) throw new Error(j.detail || 'Could not start the connection.')
       window.location.href = j.url
     } catch (e: any) { setError(e.message || 'Could not start the connection.'); setBusy(false) }
