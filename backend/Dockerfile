@@ -21,6 +21,8 @@ RUN pip install --no-cache-dir -r requirements-studio.txt
 # App code
 COPY . .
 
-# Run Alembic migrations on startup, then start server
-# Railway sets $PORT dynamically
-CMD sh -c "python -m alembic upgrade head 2>/dev/null; uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 4 --timeout-keep-alive 620 --h11-max-incomplete-event-size 524288"
+# Start: bring the database to the current schema (hackathon: app/studio/db_bootstrap.py creates the vector extension, builds a fresh
+# database or runs `alembic upgrade head`, and stops the container if that fails), then start the server.
+# Railway sets $PORT dynamically; WEB_CONCURRENCY = number of server processes (each loads the analysis libraries: keep it small on a small plan).
+ENV PYTHONUNBUFFERED=1
+CMD sh -c "python -m app.studio.db_bootstrap && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-2} --timeout-keep-alive 620 --h11-max-incomplete-event-size 524288"

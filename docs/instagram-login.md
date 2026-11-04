@@ -182,7 +182,7 @@ Environment of the **backend** (names only; values from your secret store):
 | `META_API_KEY` | needed for the fingerprints, the DNA and Voice Transcribe of the hook words (and the analysis itself) |
 | `META_DNA_MODEL`, `DNA_COST_CAP_USD`, `COACH_PERSONALISE` | optional (defaults `muse-spark-1.3`, 0.60, on) |
 
-Web: `/instagram/*` must be proxied to the backend like `/auth/*` (already in `vercel.json`, `netlify.toml`, `public/_redirects`; `web/scripts/set_backend_url.sh` rewrites it). Database: `alembic upgrade head` (set `TOKEN_ENCRYPTION_KEY` first). The backend host needs `ffmpeg` and `ffprobe` (frames and hook words).
+(Superseded for a Vercel deployment by `docs/deploy-checklist.md`: the site now calls the backend directly through `VITE_API_URL`, so no `/instagram/*` proxy is needed there.) Web: `/instagram/*` must be proxied to the backend like `/auth/*` (already in `vercel.json`, `netlify.toml`, `public/_redirects`; `web/scripts/set_backend_url.sh` rewrites it). Database: `alembic upgrade head` (set `TOKEN_ENCRYPTION_KEY` first). The backend host needs `ffmpeg` and `ffprobe` (frames and hook words).
 
 Meta console, to add the deployed redirect URI (hackathon app only):
 

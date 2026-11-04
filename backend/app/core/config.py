@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     STUDIO_DAILY_SPEND_CAP_USD: float = 10.0   # safety net: stop new analyses for the UTC day once their real cost adds up to this
     STUDIO_USER_MAX_CONCURRENT: int = 1        # safety net: analyses one user can have running at once
     STUDIO_USER_HOURLY_LIMIT: int = 10         # safety net: analyses one user can start per hour
+    STUDIO_USER_DAILY_LIMIT: int = 0           # safety net: analyses one user can start per UTC day (0 = no limit; a public deployment sets it)
     STUDIO_REGISTER_PER_IP_HOURLY: int = 5     # safety net: sign-ups per IP per hour
 
     @property

@@ -49,6 +49,9 @@ class SSESafeGZipMiddleware(GZipMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Creator AI v2 starting up", extra={"env": settings.APP_ENV})
+    from app.studio import prod_check   # hackathon: with APP_ENV=production, refuse to start on missing/placeholder variables or dev switches (names only)
+    from app.studio.config import get_env as _get_env
+    prod_check.enforce(settings, _get_env, logger)
     from app.studio.instagram.tokencrypt import startup_check   # hackathon: production needs TOKEN_ENCRYPTION_KEY (fails loudly)
     startup_check()
     async with engine.begin() as conn:
@@ -177,11 +180,8 @@ if is_prod and _trusted_hosts:
 # even when inner middleware or route handlers crash.
 
 # Allowed origins: ALLOWED_ORIGINS (a JSON list, local dev by default) plus CORS_ORIGINS (comma-separated) and FRONTEND_URL
-_cors_origins = list(dict.fromkeys(
-    [o.rstrip("/") for o in settings.ALLOWED_ORIGINS]
-    + [o.strip().rstrip("/") for o in settings.CORS_ORIGINS.split(",") if o.strip()]
-    + ([settings.FRONTEND_URL.rstrip("/")] if settings.FRONTEND_URL else [])
-))
+from app.studio.prod_check import cors_origins as _cors_list   # hackathon: same list as before; in production the localhost defaults are dropped
+_cors_origins = _cors_list(settings)
 
 app.add_middleware(CorrelationIDMiddleware)
 app.add_middleware(AbuseProtectionMiddleware)

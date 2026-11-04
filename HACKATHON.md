@@ -88,13 +88,17 @@ Every baseline file changed, and why. Everything except the model call sites is 
 | `backend/requirements.txt` | `cryptography>=42` named explicitly (it was already installed through `python-jose[cryptography]`). |
 | `web/src/App.tsx`, `web/src/pages/Settings.tsx`, `web/src/pages/Results.tsx` | `/creator-dna` route; the Settings Instagram block links to it (was localhost-only, five scopes); Results renders the measured viewer-behaviour card and the comparison card. |
 | `web/vite.config.ts`, `web/vercel.json`, `web/netlify.toml`, `web/public/_redirects` | `/instagram` proxy entries. |
+| `backend/Dockerfile` (second change) | The start command runs `python -m app.studio.db_bootstrap` first (vector extension; fresh database built and stamped, or `alembic upgrade head`; a failure stops the container instead of being hidden by `2>/dev/null`), then uvicorn with `--workers ${WEB_CONCURRENCY:-2}` (was a fixed 4); `PYTHONUNBUFFERED=1`. |
+| `backend/app/main.py` (fourth change) | Production only: `prod_check.enforce(...)` at the start of the lifespan (refuses to start on missing/placeholder variables or dev switches); CORS origins come from `prod_check.cors_origins` (same list as before, localhost entries dropped when `APP_ENV=production`). |
+| `backend/app/core/config.py` (second change) | One setting, `STUDIO_USER_DAILY_LIMIT` (default 0 = no limit, behaviour unchanged). |
+| `web/vercel.json` | Reduced to the single-page-app fallback: the site calls the backend directly through `VITE_API_URL` (the old proxy rewrites sent a refresh on `/chat` to the backend). The old file is kept as `web/vercel.proxy.example.json`. |
 | `backend/app/main.py`, `core/config.py`, `models/__init__.py`, `web/src/App.tsx`, both `.env.example` (DINOv2 branch) | One router include and one flag (`DEV_DINO`, default off), one model import line, one dev route (`/dev/dino`, `VITE_DEV_DINO`), and the new variable names. Everything else of that branch is new files (`backend/app/studio/dino/`, `backend/app/models/dino_embedding.py`, migration `s9t0u1v2w3x4` (plus the merge revision `t0u1v2w3x4y5`), `web/src/studio/DevDino.tsx`, `docs/dinov2.md`). |
 
 New files outside `backend/app/studio/`: `backend/.dockerignore`, `backend/pytest.ini`, `backend/requirements-studio.txt`, `web/.env.example`, `web/scripts/set_backend_url.sh`, `web/src/lib/config.ts`, `web/src/studio/progress.ts`, `web/src/studio/CostPanel.tsx`, `web/src/studio/CreatorDna.tsx`, `web/src/studio/CreatorDnaCard.tsx`, `backend/alembic/versions/n4o5p6q7r8s9_add_instagram_creator_dna_tables.py`, `docs/instagram-login.md`, `scripts/style_stats.py`, `scripts/rescore.py`, `scripts/bakeoff.py`, `scripts/meta_cost_check.md`, `docs/model-swap.md`, `docs/swap-check.md`, `docs/style-stats.md`, `docs/swap-defects.md`, `docs/bakeoff*.md`, `README.md`, `DEPLOY.md`, this file.
 
 New for Predicted Viewer Behaviour (branch `feature/modal-evqa`): `backend/app/studio/engagement_modal_app.py` (the Modal app `prysm-hackathon-engagement`), `backend/app/studio/engagement_modal.py` (the backend client), `backend/app/studio/tests/test_engagement.py`, `web/src/studio/ViewerBehaviourCard.tsx`, `scripts/engagement_warmup.py`, `scripts/engagement_bakeoff.py`, `docs/evqa-feasibility.md`, `docs/modal-engagement.md`, `docs/engagement-bakeoff.md`.
 
-New in `backend/app/studio/` since the swap: `score_math.py` (overall score), `quality.py` (cut-off text and style checks), `coach_style.md` + `coach_style.py` (the style addendum, on by default), `steps.py` (quote-aware step splitting) and `step_quality.py` (the step check and regeneration retry), `rescore.py` (replay of the scoring calls from saved inputs), `cost_breakdown.py` and `cost_access.py` (the cost breakdown and who may see it), and per-group model/headroom/effort switches in `meta_llm_shim.py`.
+New in `backend/app/studio/` since the swap: `prod_check.py` (production startup check and CORS list), `db_bootstrap.py` (database bootstrap used by the Dockerfile), `score_math.py` (overall score), `quality.py` (cut-off text and style checks), `coach_style.md` + `coach_style.py` (the style addendum, on by default), `steps.py` (quote-aware step splitting) and `step_quality.py` (the step check and regeneration retry), `rescore.py` (replay of the scoring calls from saved inputs), `cost_breakdown.py` and `cost_access.py` (the cost breakdown and who may see it), and per-group model/headroom/effort switches in `meta_llm_shim.py`.
 
 ## Demo shell and separation from production
 
@@ -134,6 +138,16 @@ The card that showed Hook Hold Rate (ECR) and Average Watch Rate (NAWP) used a R
 
 - What replaces it: the same Qwen2.5-VL zero-shot guess served from Modal (no silent fallback; failure is "Prediction unavailable"), labelled "Rough estimate from frame content, not measured watch data", plus Q-Align as a separate "Visual quality signal" (a band and a 1 to 5 score, never a percentage, off the scoring path unless `ENGAGEMENT_QALIGN_EVIDENCE=1`). The bake-off found the zero-shot numbers nearly constant (hook hold 70 on all three videos), so they do not reach the scoring prompt by default.
 - How it behaved: `docs/engagement-bakeoff.md`. How to deploy, warm up and check spend: `docs/modal-engagement.md`.
+
+## Deployment (Railway + Vercel + R2)
+
+`docs/deploy-checklist.md` lists every variable (names only), where each value comes from and which are required. What was added for it:
+
+- **Startup check** (`app/studio/prod_check.py`, tests in `tests/test_deploy.py`): with `APP_ENV=production` the server refuses to start, with one message naming every problem (no values), if a secret is missing or a placeholder, the database/Redis/website URL is still local, the model or transcription key is missing, R2 is missing while auto-edit is on, no account could ever be verified, a cost cap was not chosen on purpose, or a dev switch is on (`DEV_BAKEOFF`, `DEV_DINO`, `STUDIO_EXPOSE_COST`, `DEBUG_SAVE_INPUTS`, `INSTAGRAM_FIXTURE`, `DEBUG`). Outside production it does nothing.
+- **Cost caps**: the daily spend cap and per-user hourly limit already existed; `STUDIO_USER_DAILY_LIMIT` is new (default off). In production all three must be set explicitly.
+- **Database**: `app/studio/db_bootstrap.py` (see the Dockerfile row above). Reason: the baseline migrations cannot be replayed on an empty database, and the old start command ignored migration errors. Found while testing the container: the old `python -m alembic upgrade head` finds the project's own `alembic/` migrations folder instead of the package when run from `/app`, so it failed every time and the `2>/dev/null` hid it. The bootstrap calls the `alembic` command line tool instead, and imports the whole app before `create_all` so the server processes do not race to create tables.
+- **Railway**: `backend/railway.json` (Dockerfile build, `/health` healthcheck, restart on failure). JSON cannot carry the hackathon header comment.
+- **Web**: `web/vercel.json` is the SPA fallback only (see the table).
 
 ## Step-list fixes (from the bake-off screenshots)
 

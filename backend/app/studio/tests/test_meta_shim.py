@@ -219,9 +219,9 @@ def test_the_safety_limits_come_from_the_settings():
     from types import SimpleNamespace
     from app.studio.safety import limits_from_settings
     s = SimpleNamespace(STUDIO_DAILY_SPEND_CAP_USD=3.5, STUDIO_USER_MAX_CONCURRENT=2, STUDIO_USER_HOURLY_LIMIT=7,
-                        STUDIO_REGISTER_PER_IP_HOURLY=4, STUDIO_MAX_CONCURRENT=3)
+                        STUDIO_USER_DAILY_LIMIT=9, STUDIO_REGISTER_PER_IP_HOURLY=4, STUDIO_MAX_CONCURRENT=3)
     lim = limits_from_settings(s)
-    assert (lim.daily_spend_cap_usd, lim.user_max_concurrent, lim.user_hourly_limit, lim.register_per_ip_hourly, lim.max_concurrent) == (3.5, 2, 7, 4, 3)
+    assert (lim.daily_spend_cap_usd, lim.user_max_concurrent, lim.user_hourly_limit, lim.user_daily_limit, lim.register_per_ip_hourly, lim.max_concurrent) == (3.5, 2, 7, 9, 4, 3)
 
 
 def test_the_baseline_cost_tracker_prices_spark_tokens():

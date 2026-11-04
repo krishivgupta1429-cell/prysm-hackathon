@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 DAILY_BUDGET_MESSAGE = "Prysm's demo budget for today is used up. Please try again tomorrow."
 ALREADY_RUNNING_MESSAGE = "You already have an analysis running. Please wait for it to finish."
 HOURLY_LIMIT_MESSAGE = "You've reached the hourly limit for analyses. Please try again in a little while."
+DAILY_LIMIT_MESSAGE = "You've reached today's limit for analyses. Please come back tomorrow."
 REGISTER_LIMIT_MESSAGE = "Too many sign-ups from this network. Please try again later."
 
 UNLIMITED_PLAN = "creator"          # the top plan: every feature the website gates is open
@@ -25,6 +26,7 @@ UNLIMITED_CREDITS = 999_999.0       # what payloads report as the balance; the w
 PREFIX = "prysm:studio"
 SPEND_TTL_S = 48 * 3600
 HOUR_TTL_S = 2 * 3600
+DAY_TTL_S = 36 * 3600
 SLOT_TTL_S = 30 * 60                # a slot whose job died frees itself after this long
 
 
@@ -42,6 +44,7 @@ class Limits:
     daily_spend_cap_usd: float = 10.0
     user_max_concurrent: int = 1
     user_hourly_limit: int = 10
+    user_daily_limit: int = 0           # 0 = no per-user daily limit (a public deployment sets one: STUDIO_USER_DAILY_LIMIT)
     register_per_ip_hourly: int = 5
     max_concurrent: int = 2
 
@@ -49,7 +52,8 @@ class Limits:
 def limits_from_settings(settings) -> Limits:
     """The safety-net limits from the app settings (the only place they are read, so routers pass one object around)."""
     return Limits(daily_spend_cap_usd=settings.STUDIO_DAILY_SPEND_CAP_USD, user_max_concurrent=settings.STUDIO_USER_MAX_CONCURRENT,
-                  user_hourly_limit=settings.STUDIO_USER_HOURLY_LIMIT, register_per_ip_hourly=settings.STUDIO_REGISTER_PER_IP_HOURLY,
+                  user_hourly_limit=settings.STUDIO_USER_HOURLY_LIMIT, user_daily_limit=settings.STUDIO_USER_DAILY_LIMIT,
+                  register_per_ip_hourly=settings.STUDIO_REGISTER_PER_IP_HOURLY,
                   max_concurrent=settings.STUDIO_MAX_CONCURRENT)
 
 
@@ -115,6 +119,13 @@ async def admit(redis, user_id: str, limits: Limits, now: datetime | None = None
     if count > limits.user_hourly_limit:
         await release_user(redis, user_id)
         raise LimitExceeded(HOURLY_LIMIT_MESSAGE)
+    if limits.user_daily_limit > 0:
+        day_key = f"{PREFIX}:day:{user_id}:{_utc(now):%Y%m%d}"
+        day_count = await redis.incr(day_key)
+        await redis.expire(day_key, DAY_TTL_S)
+        if day_count > limits.user_daily_limit:
+            await release_user(redis, user_id)
+            raise LimitExceeded(DAILY_LIMIT_MESSAGE)
 
 
 async def release_user(redis, user_id: str) -> None:
