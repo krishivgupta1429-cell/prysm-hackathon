@@ -46,7 +46,6 @@ export default function Settings() {
   const [handleValue, setHandleValue] = useState('')
   const [handleError, setHandleError] = useState('')
   const [savingHandle, setSavingHandle] = useState(false)
-  const [igStatus, setIgStatus] = useState<'idle' | 'connected' | 'error'>('idle')
   const [usageData, setUsageData] = useState<UsageData | null>(null)
   const [usageLoading, setUsageLoading] = useState(false)
   const navigate = useNavigate()
@@ -62,9 +61,6 @@ export default function Settings() {
       setUser(u)
       setLoading(false)
     })
-    const ig = searchParams.get('instagram')
-    if (ig === 'connected') setIgStatus('connected')
-    else if (ig === 'error') setIgStatus('error')
     const tab = searchParams.get('tab')
     if (!STUDIO_MODE && (tab === 'usage' || tab === 'billing')) setActiveTab(tab as any)
   }, [navigate])
@@ -271,26 +267,6 @@ export default function Settings() {
                   <span className={`text-sm font-semibold font-body ${planAccent.text}`}>{getPlanLabel(user?.plan)}</span>
                 </div>
                 </>)}
-              </div>
-            </div>
-
-            {/* Instagram connect + Creator DNA (hackathon): the flow lives on /creator-dna */}
-            <div>
-              <p className="text-[10px] font-bold tracking-widest uppercase text-foreground/25 mb-3 font-body">Integrations</p>
-              <div className="border border-border rounded-xl p-5 bg-background">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-display font-semibold">Instagram and Creator DNA</p>
-                    <p className="text-[12px] text-foreground/35 font-body mt-0.5">
-                      {igStatus === 'connected' ? 'Your Instagram account is connected.' : 'Connect your own account to personalise every analysis with your real reels.'}
-                    </p>
-                    {igStatus === 'error' && <p className="text-[12px] text-red-500/70 font-body mt-1">Connection failed. Please try again.</p>}
-                  </div>
-                  <a href="/creator-dna"
-                    className="px-4 py-2 rounded-xl bg-foreground text-background text-[12px] font-body font-bold hover:opacity-85 transition-opacity whitespace-nowrap">
-                    {igStatus === 'connected' ? 'Open →' : 'Connect →'}
-                  </a>
-                </div>
               </div>
             </div>
 

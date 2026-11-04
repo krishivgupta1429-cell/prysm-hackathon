@@ -5,6 +5,7 @@ import { apiUrl } from '@/lib/api'
 import { canAccess, getNextPlan, getPlanCredits, getPlanLabel } from '@/lib/plans'
 import { SUPPORT_EMAIL, ALLOW_LINKS } from '@/lib/config'
 import { STUDIO_MODE } from '@/lib/config'
+import InstagramCard from '@/studio/InstagramCard'
 
 
 interface ParamSummary { name: string; score: number; problem: string }
@@ -594,6 +595,7 @@ export default function Dashboard() {
               </a>
             ))}
           </div>
+          {STUDIO_MODE && <InstagramCard />}
         </div>
       </div>
 

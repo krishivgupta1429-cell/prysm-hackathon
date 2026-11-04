@@ -97,7 +97,7 @@ Business Use Case rate limiting: **calls in 24 hours = 4800 x the number of impr
 | performance_index (reach, else views, divided by the median of the imported reels), watch_through (average watch time / duration) | `metrics.py` |
 | Fingerprints (one Spark call per reel on about 6 frames + caption) and the Creator DNA (one call; every claim cites reels, uncited or invented citations are dropped in code) | `dna.py` (`META_DNA_MODEL`, default `muse-spark-1.3`) |
 | Personalised analysis: addendum on both scoring prompts (`COACH_PERSONALISE`, default on for users who have a DNA), the "How this compares to your last N reels" block saved on the result | `personalise.py`, one new optional parameter `creator_dna_addendum` of `run_full_analysis` |
-| Web: `/creator-dna` page, results cards, Settings link | `web/src/studio/CreatorDna.tsx`, `CreatorDnaCard.tsx`, `ViewerBehaviourCard.tsx` |
+| Web: `/creator-dna` page, results cards, the Dashboard's Instagram card (`InstagramCard.tsx`) | `web/src/studio/CreatorDna.tsx`, `CreatorDnaCard.tsx`, `ViewerBehaviourCard.tsx` |
 
 Behaviour worth knowing:
 
@@ -163,7 +163,7 @@ Use the **hackathon** Meta app only, never the production one.
 
 8. Run `alembic upgrade head` on the database (adds `ig_reel.analysis_level` and encrypts any token already stored; set `TOKEN_ENCRYPTION_KEY` first).
 9. For a hosted site, make sure `/instagram/*` is proxied to the backend like `/auth/*` (`vercel.json`, `netlify.toml` and `public/_redirects` now carry it; `web/scripts/set_backend_url.sh` rewrites it too).
-10. Test: sign in with email or Google, open Settings > Instagram and Creator DNA (or `/creator-dna`), read the consent screen, continue to Instagram, accept, choose how many reels, Import.
+10. Test: sign in with email or Google, open the Dashboard and use the Instagram card (or go to `/creator-dna`), read the consent screen, continue to Instagram, accept, choose how many reels, Import.
 
 Going beyond the people who have a role on the app (any creator) needs Advanced access: App Review for both permissions plus Business Verification. That is outside this hackathon build.
 

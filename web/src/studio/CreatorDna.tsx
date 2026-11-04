@@ -128,13 +128,14 @@ export default function CreatorDna() {
       <nav className="border-b border-border px-4 sm:px-8 h-14 flex items-center justify-between sticky top-0 bg-background/90 backdrop-blur-md z-40">
         <Link to="/" className="font-logo text-[18px] sm:text-[21px] text-foreground">PRYSM</Link>
         <span className="flex items-center gap-5 text-sm font-body text-foreground/45">
+          <Link to="/dashboard" className="hover:text-foreground/70 transition-colors">Dashboard</Link>
           <Link to="/analyse" className="hover:text-foreground/70 transition-colors">Analyse a video</Link>
-          <Link to="/settings" className="hover:text-foreground/70 transition-colors">Settings</Link>
         </span>
       </nav>
 
       <main className="max-w-3xl mx-auto px-4 sm:px-5 py-8 sm:py-10 space-y-5">
         <header>
+          <Link to="/dashboard" className="inline-block mb-3 text-[13px] text-foreground/45 hover:text-foreground/70 transition-colors font-body" data-testid="back-to-dashboard">&larr; Back to dashboard</Link>
           <h1 className="font-display text-3xl font-black tracking-tight">Creator DNA</h1>
           <p className="text-foreground/45 text-sm font-body mt-1">What your own reels show about what works for you, from the numbers Instagram measured.</p>
         </header>
