@@ -871,3 +871,33 @@ def test_the_comparison_card_lists_the_cited_reels_in_plain_language():
     out = personalise.cited_reels(data, [1], [2])
     assert [(o["n"], o["group"], o["vsUsual"], o["hookWords"], o["partial"]) for o in out] == [
         (1, "strongest", "Reach 25% above your usual", "Stop scrolling", False), (2, "weakest", "Reach 40% below your usual", None, True)]
+
+
+# =================================================================== phase 5: fail loudly in production
+
+def test_production_refuses_to_start_without_a_valid_token_encryption_key(monkeypatch):
+    tokencrypt.startup_check()                                                   # development: silent without a key
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    with pytest.raises(RuntimeError, match="TOKEN_ENCRYPTION_KEY must be set in production"):
+        tokencrypt.startup_check()
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "not-a-key")
+    with pytest.raises(RuntimeError) as e:
+        tokencrypt.startup_check()
+    assert "not-a-key" not in str(e.value)
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", new_key())
+    tokencrypt.startup_check()                                                   # a valid key: starts
+    monkeypatch.setenv("INSTAGRAM_FIXTURE", "1")
+    with pytest.raises(RuntimeError, match="INSTAGRAM_FIXTURE=1"):
+        tokencrypt.startup_check()
+    monkeypatch.setattr(settings, "APP_ENV", "staging")
+    with pytest.raises(RuntimeError, match="INSTAGRAM_FIXTURE=1"):
+        tokencrypt.startup_check()
+
+
+def test_a_dna_stored_before_the_3_reel_rule_is_shown_as_the_breakdown_only():
+    from app.studio.instagram import router
+    old = type("R", (), {"sample_size": 2, "dna": {"mode": "descriptive", "shared": [{"claim": "2 of 2 reels use the same hook: bold claim", "reels": [1, 2]}], "partial_reels": []}})()
+    d = router._dna_for_display(old)
+    assert d["mode"] == "breakdown" and d["shared"] == [] and d["reason"] == "Patterns need at least 3 reels."
+    ok = type("R", (), {"sample_size": 3, "dna": {"mode": "descriptive", "shared": [1]}})()
+    assert router._dna_for_display(ok)["mode"] == "descriptive"

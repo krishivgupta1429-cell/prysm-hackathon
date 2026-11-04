@@ -49,6 +49,8 @@ class SSESafeGZipMiddleware(GZipMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Creator AI v2 starting up", extra={"env": settings.APP_ENV})
+    from app.studio.instagram.tokencrypt import startup_check   # hackathon: production needs TOKEN_ENCRYPTION_KEY (fails loudly)
+    startup_check()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # Ensure columns added after initial table creation exist

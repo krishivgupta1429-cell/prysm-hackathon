@@ -179,6 +179,14 @@ async def import_status(job_id: str, user: User = Depends(get_current_user)):
     return job
 
 
+def _dna_for_display(row):
+    """A DNA stored before the 3-reel rule (1-2 reels) is shown as the breakdown only, with no pattern claim, without touching the row."""
+    if (row.sample_size or 0) < 3 and (row.dna or {}).get("mode") != "breakdown":
+        return {"mode": "breakdown", "reason": "Patterns need at least 3 reels.", "shared": [], "strongest": [], "weakest": [], "keep": [], "change": [],
+                "sample_size": row.sample_size, "partial_reels": (row.dna or {}).get("partial_reels", [])}
+    return row.dna
+
+
 @router.get("/dna")
 async def creator_dna(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     data = await personalise.load(db, user.id)
@@ -190,7 +198,7 @@ async def creator_dna(user: User = Depends(get_current_user), db: AsyncSession =
     return {
         "connected": True, "isFixture": bool(acct.is_fixture), "username": acct.username, "profilePictureUrl": acct.profile_picture_url,
         "lastImport": acct.last_import_summary, "lastImportAt": _iso(acct.last_import_at),
-        "dna": None if row is None else {"summary": row.summary, "data": row.dna, "sampleSize": row.sample_size,
+        "dna": None if row is None else {"summary": row.summary, "data": _dna_for_display(row), "sampleSize": row.sample_size,
                                          "metricsAvailable": row.metrics_available, "medians": row.medians,
                                          "model": row.model, "costUsd": row.cost_usd, "createdAt": _iso(row.created_at)},
         "reels": reels, "metricLabels": M.METRIC_LABEL,

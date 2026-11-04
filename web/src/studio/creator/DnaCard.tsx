@@ -7,7 +7,8 @@ const LABEL = 'text-[10px] font-bold tracking-widest uppercase text-foreground/3
 /** The claim text without a trailing "in Reels 2, 3" (the chips say it). */
 export function cleanClaim(text: string): string {
   const t = text.replace(/[\s,;]*\(?\b(?:(?:such as|as|like)\s+)?(?:(?:seen\s+)?(?:in|from)\s+)?Reels?\s+\d+(?:\s*(?:,|and|&)\s*(?:Reels?\s+)?\d+)*\)?\s*\.?$/i, '').trim()
-  return t ? t[0].toUpperCase() + t.slice(1) : text
+  const plain = t.replace(/_/g, ' ')   // "visual_only" -> "visual only"
+  return plain ? plain[0].toUpperCase() + plain.slice(1) : text
 }
 
 export function ReelChips({ reels, onOpen }: { reels: number[]; onOpen: (n: number) => void }) {

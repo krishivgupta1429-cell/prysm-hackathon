@@ -111,6 +111,23 @@ class EncryptedToken(TypeDecorator):
             return None
 
 
+def startup_check() -> None:
+    """Called once when the server starts. In production / staging the server refuses to start without a valid TOKEN_ENCRYPTION_KEY
+    (and with the dev-only fixture mode on), so Instagram tokens can never be saved in plain text by mistake. Silent in development."""
+    if not _production():
+        return
+    keys = _keys_raw()
+    if not keys:
+        raise RuntimeError("TOKEN_ENCRYPTION_KEY must be set in production (it encrypts the Instagram access token). "
+                           "Create one with: python -m app.studio.instagram.tokencrypt generate")
+    try:
+        _fernet(keys)
+    except TokenCryptoError as e:
+        raise RuntimeError(str(e)) from None
+    if (config.get_env("INSTAGRAM_FIXTURE") or "") == "1":
+        raise RuntimeError("INSTAGRAM_FIXTURE=1 (fake Instagram data) must not be set in production.")
+
+
 def encrypt_existing(connection) -> int:
     """Re-save every plain token as encrypted (sync connection, used by the migration). Returns how many rows changed.
     Needs TOKEN_ENCRYPTION_KEY; raises TokenCryptoError without it."""
