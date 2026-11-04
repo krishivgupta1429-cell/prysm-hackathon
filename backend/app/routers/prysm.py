@@ -134,6 +134,10 @@ async def _job_status(job_id: str) -> dict:
     return {"status": "processing"}
 
 
+class _NoDna(Exception):
+    """Internal (hackathon): a studied reel skips the Creator DNA addendum."""
+
+
 class _NoCharge(Exception):
     """Internal: skips the credit deduction block (STUDIO_UNLIMITED)."""
 
@@ -214,8 +218,12 @@ async def _run_analysis_task(
         dna_addendum = ""
         try:
             from app.studio.instagram import personalise as _pz
+            if intent == "competitor":   # a studied reel is not personalised with the creator's reels and not compared with them
+                raise _NoDna()
             async with AsyncSessionLocal() as _dna_db:
                 dna_addendum = _pz.addendum(await _pz.load(_dna_db, _uuid.UUID(str(user_id))))
+        except _NoDna:
+            pass
         except Exception as _dna_err:
             _log.warning(f"[Prysm] Creator DNA addendum skipped for job {job_id}: {type(_dna_err).__name__}")
         result = await run_full_analysis(
@@ -259,6 +267,23 @@ async def _run_analysis_task(
                     _pz2.strip_personal(result)   # fail closed: no unchecked sentence about the creator's reels goes out
                 except Exception:
                     pass
+        # Hackathon: for a studied reel, a short "how to adapt this to my niche" from the creator's DNA (only when Instagram is connected with a
+        # usable DNA; grounded in their imported reels; fails soft and never touches the studied reel's own analysis)
+        if intent == "competitor" and settings.META_MODE:
+            try:
+                from app.studio.instagram import dna as _dna, personalise as _pz
+                from app.core.cache import redis_client as _rc2
+                _sp2 = _dna.Spend(_dna.cost_cap_usd())
+                async with AsyncSessionLocal() as _ad_db:
+                    _ad = await _pz.adapt_block(_ad_db, _uuid.UUID(str(user_id)), result, niche, _sp2)
+                if _ad:
+                    result["adaptToMyNiche"] = _ad
+                if _sp2.usd:
+                    if isinstance(result.get("_cost"), dict):
+                        result["_cost"]["creator_dna_usd"] = _sp2.usd
+                        result["_cost"]["total_usd"] = round(float(result["_cost"].get("total_usd") or 0.0) + _sp2.usd, 6)
+            except Exception as _ad_err:
+                _log.warning(f"[Prysm] Niche adaptation skipped for job {job_id}: {type(_ad_err).__name__}")
         if progress is not None:
             await progress.flush()
             try:
@@ -317,6 +342,9 @@ async def _run_analysis_task(
                 first_frame = result_frames[0]["base64"] if result_frames else None
 
                 embeddings = result.get("_embeddings") or {}
+                if intent == "competitor":   # hackathon: a studied reel is someone else's video: keep the result text only (no still frame, no frames, no embedding)
+                    first_frame, embeddings = None, {}
+                    result.pop("frames", None)
                 save_db.add(PrysmAnalysis(
                     id=analysis_id,
                     user_id=user_id,
@@ -484,7 +512,7 @@ async def analyse_video(
     if not video and not url:
         raise HTTPException(status_code=400, detail="Provide a video file or URL.")
     if not settings.STUDIO_ALLOW_LINKS and url and url.strip() and not (video and video.size):
-        raise HTTPException(status_code=400, detail="Reel links are switched off in this deployment. Please upload your video instead.")
+        raise HTTPException(status_code=400, detail="Studying reels from a link is switched off in this deployment. Please upload your video instead.")
 
     import logging
     _log = logging.getLogger(__name__)
@@ -569,6 +597,7 @@ async def analyse_video(
                        "youtube.com", "www.youtube.com", "youtu.be", "m.youtube.com"]
             if not any(parsed.hostname and parsed.hostname.endswith(h) for h in allowed):
                 raise HTTPException(status_code=400, detail="Only Instagram, TikTok, and YouTube links are supported.")
+            link_counted = False
             if current_user:
                 from app.core.cache import redis_client as _rl
                 lk = f"link_limit:{current_user.id}"
@@ -576,15 +605,26 @@ async def analyse_video(
                     pipe = _rl.pipeline()
                     pipe.incr(lk); pipe.expire(lk, 86400)
                     rp = await pipe.execute()
-                    if rp[0] > 20:
-                        raise HTTPException(status_code=429, detail="Daily link analysis limit reached.")
+                    link_counted = True
+                    if rp[0] > settings.STUDIO_LINK_DAILY_LIMIT:   # hackathon: the baseline's fixed 20 is now a setting
+                        await _rl.decr(lk)
+                        raise HTTPException(status_code=429, detail="You've reached today's limit for studying reels. Try again tomorrow, or upload your own video.")
                 except HTTPException:
                     raise
                 except Exception as rl_err:
                     _log.warning(f"[Prysm] Rate limit check failed (Redis down?): {rl_err} — blocking request to fail safe")
                     raise HTTPException(status_code=503, detail="Service temporarily unavailable — please try again in a moment.")
-            post_metadata = extract_post_metadata(url.strip())
-            video_path = download_video(url.strip(), work_dir, metadata=post_metadata)
+            # Hackathon: the baseline's metadata lookup + download, in a worker thread with a time limit and one plain message on any failure
+            from app.studio import links as _links
+            try:
+                post_metadata, video_path = await _links.fetch_linked_reel(url.strip(), work_dir, settings.STUDIO_LINK_DOWNLOAD_TIMEOUT_S)
+            except _links.LinkError as link_err:
+                if link_counted:   # a link that could not be fetched does not use up the day's allowance
+                    try:
+                        await _rl.decr(lk)
+                    except Exception:
+                        pass
+                raise HTTPException(status_code=422, detail=str(link_err))
 
         if not video_path or not os.path.exists(video_path):
             raise HTTPException(status_code=400, detail="Could not process video.")

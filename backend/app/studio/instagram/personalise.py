@@ -296,3 +296,68 @@ def measured(data: Optional[dict]) -> Optional[dict]:
             "avgSkipRate": med.get("avg_skip_rate"), "medianReach": med.get("median_reach"), "avgReach": med.get("avg_reach"),
             "missing": (data["account"].last_import_summary or {}).get("missing_metrics", []),
             "partialReels": sum(1 for r in reels if r["partial"])}
+
+
+# ------------------------------------------------------------------ "how to adapt this to my niche" for a STUDIED reel
+
+ADAPT_NOTE = "Borrow the structure, not the content."
+ADAPT_MAX_BULLETS = 3
+
+
+def _studied_text(result: dict) -> str:
+    """What the studied reel's own analysis says about its format: the summary and the 'next video blueprint' (hook, structure, audio, text, cta)."""
+    t = result.get("nextVideoTemplate") or {}
+    parts = [f"Summary: {str(result.get('summary') or '')[:500]}"]
+    for k in ("hook", "structure", "audio", "text", "cta"):
+        if t.get(k):
+            parts.append(f"{k}: {str(t[k])[:300]}")
+    return "\n".join(parts)
+
+
+def adapt_prompt(result: dict, data: dict, niche: str) -> str:
+    dna = data["dna"].dna or {}
+    lines = [f"Patterns from the creator's {data['dna'].sample_size} most recent Instagram reels (small sample, not proof):"]
+    for key, lead in (("strongest", "Their strongest reels share"), ("weakest", "Their weakest reels repeat"), ("keep", "Habits to keep"),
+                      ("change", "Habits to change")):
+        if dna.get(key):
+            lines.append(f"{lead}: {_cite(dna[key])}.")
+    lines += _fact_lines(data)
+    return (
+        "A creator studied someone else's successful reel. Below: what makes that reel work, then facts about the creator's OWN reels.\n\n"
+        f"STUDIED REEL (someone else's video)\n{_studied_text(result)}\n\n"
+        f"THE CREATOR (niche: {niche or 'not given'})\n" + "\n".join(lines) + "\n\n"
+        f"Write at most {ADAPT_MAX_BULLETS} short bullets (each 18 to 35 words) on how this creator could adapt the STRUCTURE of the studied reel to "
+        "their own niche and habits. Rules: borrow the structure, not the content; never suggest copying the studied reel's words, scenes, "
+        "audio or on-screen text. Tie a bullet to the creator's own habits only through the facts above, naming the reel as \"your Reel N\" "
+        "(never invent a detail, quote, number or sound about their reels). Plain, friendly, specific to the niche. "
+        'Answer with ONE JSON object and nothing else: {"adapt": ["bullet 1", "bullet 2"]}')
+
+
+async def adapt_block(db, user_id, result: dict, niche: str, spend: D.Spend, enabled: bool = True) -> Optional[dict]:
+    """`adaptToMyNiche` for a studied reel: None when Instagram is not connected, there is no usable DNA, personalisation is off, the
+    call fails, or no bullet survives the grounding check (a bullet that talks about the creator's reels must be grounded in them)."""
+    if not enabled or not personalise_enabled():
+        return None
+    data = await load(db, user_id)
+    if not usable(data) or spend.usd >= spend.cap:
+        return None
+    try:
+        j = D._parse(await D._ask([{"type": "text", "text": adapt_prompt(result, data, niche)}], 900, spend))
+    except Exception as e:   # noqa: BLE001
+        log.warning("[Personalise] adapt call failed: %s", type(e).__name__)
+        return None
+    facts = G.facts_from(data["reels"])
+    bullets = []
+    for b in (j or {}).get("adapt") or []:
+        b = " ".join(str(b).split())
+        if not b or len(b.split()) > 60:
+            continue
+        if G.sentence_problems(b, facts) in (None, []):   # not about their reels, or grounded in them
+            bullets.append(b)
+    bullets = bullets[:ADAPT_MAX_BULLETS]
+    if not bullets:
+        return None
+    dna = data["dna"].dna or {}
+    return {"note": ADAPT_NOTE, "niche": niche, "bullets": bullets, "sampleSize": data["dna"].sample_size,
+            "isFixture": bool(data["account"].is_fixture), "costUsd": spend.usd,
+            "citedReels": cited_reels(data, dna.get("top") or [], dna.get("bottom") or [])}

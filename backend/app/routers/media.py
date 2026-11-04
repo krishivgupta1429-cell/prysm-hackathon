@@ -138,6 +138,9 @@ async def submit_link(
     db: AsyncSession = Depends(get_db),
 ):
     """Submit a social media link for download and analysis."""
+    from app.core.config import settings as _settings   # hackathon: the same switch as the Prysm analysis route (STUDIO_ALLOW_LINKS, default off)
+    if not _settings.STUDIO_ALLOW_LINKS:
+        raise HTTPException(status_code=400, detail="Studying reels from a link is switched off in this deployment. Please upload your video instead.")
     source = _detect_source(body.url)
 
     media = Media(

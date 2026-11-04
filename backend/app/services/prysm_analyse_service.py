@@ -44,6 +44,12 @@ logger = logging.getLogger(__name__)
 _MIN_STEPS = 3  # hackathon: minimum steps per parameter that the validator may leave
 
 
+def _style_for(intent: str, creator_dna_addendum: str = "") -> str:
+    """Hackathon: the coach-style and Creator DNA addenda are written for a creator's OWN video (fixes, 'your reels'). A studied reel
+    (intent "competitor") keeps the baseline's blueprint prompts exactly: no addendum."""
+    return "" if intent == "competitor" else _coach_style.addendum() + creator_dna_addendum
+
+
 def _validate_suggestions(result: dict, whisper_data: dict, vision_data: dict, intent: str) -> dict:
     """
     Post-processing validation layer: removes or rewrites howToDoIt steps that are
@@ -2679,14 +2685,14 @@ async def run_full_analysis(
             saved_frames=saved_frames, post_metadata=post_metadata, audio_path=audio_path,
             has_vision=has_vision, has_audio=has_audio,
             extra_signals=_extra_signals,
-            style_addendum=_coach_style.addendum() + creator_dna_addendum,
+            style_addendum=_style_for(intent, creator_dna_addendum),
         )
         is_competitor = intent == "competitor"
         if settings.DEBUG_SAVE_INPUTS:  # hackathon: exact scoring inputs, saved once, for scripts/rescore.py
             try:
                 from app.studio.rescore import save_inputs
                 save_inputs(dict(
-                    call_a_prompt=_call_a_prompt, call_b_prompt=_call_b_prompt, style_addendum=_coach_style.addendum() + creator_dna_addendum,
+                    call_a_prompt=_call_a_prompt, call_b_prompt=_call_b_prompt, style_addendum=_style_for(intent, creator_dna_addendum),
                     max_tokens_a=9000 if is_competitor else 7000, max_tokens_b=6000, intent=intent, niche=niche,
                     platform=platform, source_type=source_type, scored_weights=scored_weights,
                     whisper_data={k: whisper_data.get(k) for k in ("transcript", "segments", "verbalCTA", "language")},
@@ -2821,7 +2827,7 @@ async def run_full_analysis(
             # (fewer than 3 steps, fallback line first, no ready-to-say line where one is needed). Never fails the analysis.
             try:
                 _step_quality.normalise_all(result)
-                if settings.STEP_REGENERATE:
+                if settings.STEP_REGENERATE and intent != "competitor":   # the regeneration prompt carries the coach style, which a studied reel does not use
                     async def _regen_call(_prompt, _max_tokens):
                         return await _claude_with_retry(client, model="claude-sonnet-4-6", max_tokens=_max_tokens,
                                                         messages=[{"role": "user", "content": _prompt}])

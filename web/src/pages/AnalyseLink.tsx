@@ -6,6 +6,7 @@ import { getNextPlan } from '@/lib/plans'
 import { STUDIO_MODE } from '@/lib/config'
 import { currentLabel, type Progress } from '@/studio/progress'
 import PrismProcessing from '@/components/PrismProcessing'
+import OwnReelPicker from '@/studio/OwnReelPicker'   // hackathon: pick one of the connected Instagram reels
 
 const PENDING_JOB_KEY = 'prysm_pending_job'
 
@@ -23,12 +24,16 @@ const PROCESSING_STEPS_COMPETITOR = [
   { text: 'Almost there — finalizing breakdown...', delay: 100000 },
 ]
 
-type Intent = 'competitor'
+type Intent = 'competitor' | 'my_video'   // hackathon: 'my_video' = the creator's own posted reel (the baseline backend path for an own link)
+
+// Hackathon: shown next to the button. Measured on this pipeline: see docs/link-flow-notes.md
+const ESTIMATE = 'Usually takes 3 to 6 minutes. A longer reel can take up to 9.'
 
 export default function AnalyseLink() {
   const [step, setStep] = useState(1)
   const [direction, setDirection] = useState<'forward' | 'back'>('forward')
-  const [intent] = useState<Intent>('competitor')
+  const [intent, setIntent] = useState<Intent>('competitor')
+  const [linkFailed, setLinkFailed] = useState(false)   // hackathon: the link could not be fetched: offer the upload instead
   const [selectedNiches, setSelectedNiches] = useState<string[]>([])
   const [customNiche, setCustomNiche] = useState('')
   const [showCustom, setShowCustom] = useState(false)
@@ -110,6 +115,7 @@ export default function AnalyseLink() {
     }
 
     setError('')
+    setLinkFailed(false)
     setLoading(true)
 
     const steps = PROCESSING_STEPS_COMPETITOR
@@ -141,6 +147,7 @@ export default function AnalyseLink() {
       }
       if (!submitRes.ok) {
         const errData = await submitRes.json().catch(() => ({}))
+        if (STUDIO_MODE && (submitRes.status === 422 || submitRes.status === 400)) setLinkFailed(true)
         throw new Error(errData.detail || errData.error || `Server error: ${submitRes.status}`)
       }
 
@@ -299,12 +306,28 @@ export default function AnalyseLink() {
             <div className="text-center mb-10">
               <p className="text-[11px] font-semibold tracking-[0.2em] uppercase text-foreground/25 mb-4 font-body">Step 1</p>
               <h1 className="font-display text-4xl font-bold tracking-tight mb-3">
-                Drop the link
+                {intent === 'my_video' ? 'Pick your reel' : 'Drop the link'}
               </h1>
               <p className="text-foreground/40 font-body text-base">
-                Paste any Instagram Reel or Post URL
+                {intent === 'my_video' ? 'Choose one of your Instagram reels, or paste its link' : 'Paste any Instagram Reel or Post URL'}
               </p>
             </div>
+
+            {/* Hackathon: a reel to study (the baseline flow) or one of the creator's own reels (new) */}
+            {STUDIO_MODE && (
+              <div role="tablist" aria-label="Which reel" className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-foreground/5 mb-6" data-testid="reel-kind">
+                {([['competitor', 'A reel I want to study'], ['my_video', 'My own reel']] as const).map(([k, label]) => (
+                  <button key={k} role="tab" aria-selected={intent === k} type="button"
+                    onClick={() => { if (intent !== k) { setIntent(k); setUrl(''); setError('') } }}
+                    className={`py-2.5 rounded-xl text-[13px] font-body font-semibold transition-all cursor-pointer ${intent === k ? 'bg-background text-foreground shadow-sm' : 'text-foreground/40 hover:text-foreground/60'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {STUDIO_MODE && intent === 'my_video' && (
+              <div className="mb-6"><OwnReelPicker pickedUrl={url} onPick={permalink => { setUrl(permalink); setError('') }} /></div>
+            )}
 
             <div className="relative group">
               <div className={`absolute -inset-1 rounded-2xl transition-all duration-500 ${
@@ -317,7 +340,7 @@ export default function AnalyseLink() {
                   placeholder="https://www.instagram.com/reel/..."
                   value={url}
                   onChange={e => { setUrl(e.target.value); setError('') }}
-                  autoFocus
+                  autoFocus={intent === 'competitor'}
                   className={`w-full border-2 rounded-2xl px-6 py-5 text-base text-foreground placeholder:text-foreground/20 outline-none transition-all font-body bg-background ${
                     urlValid ? 'border-green-500/40 shadow-[0_0_30px_rgba(34,197,94,0.08)]' : 'border-border focus:border-foreground/30'
                   }`}
@@ -380,7 +403,7 @@ export default function AnalyseLink() {
             <div className="text-center mb-10">
               <p className="text-[11px] font-semibold tracking-[0.2em] uppercase text-foreground/25 mb-4 font-body">Step 3</p>
               <h1 className="font-display text-4xl font-bold tracking-tight mb-3">
-                {intent === 'competitor' ? "What's your niche?" : "What's your niche?"}
+                {"What's your niche?"}
               </h1>
               <p className="text-foreground/40 font-body text-base">
                 {intent === 'competitor' ? 'So we tailor takeaways to your content style' : 'Pick up to 3 that describe your content'}
@@ -471,7 +494,7 @@ export default function AnalyseLink() {
                 {intent === 'competitor' ? 'What caught your eye?' : 'Tell us about it'}
               </h1>
               <p className="text-foreground/40 font-body text-base">
-                What do you want to learn from this video?
+                {intent === 'competitor' ? 'What do you want to learn from this video?' : 'What do you want to know about your reel?'}
               </p>
             </div>
 
@@ -487,9 +510,9 @@ export default function AnalyseLink() {
             {error && (
               <div className="mt-4 px-4 py-3 rounded-xl bg-red-50/50 border border-red-200/50">
                 <p className="text-red-600 text-sm font-body">{error}</p>
-                {error.toLowerCase().includes('download') && (
-                  <a href="/analyse/upload" className="text-sm text-red-500/60 underline hover:text-red-600 transition-colors mt-1 inline-block font-body">
-                    Switch to Upload Raw Video →
+                {(error.toLowerCase().includes('download') || linkFailed) && (
+                  <a href="/analyse/upload" className="text-sm text-red-500/60 underline hover:text-red-600 transition-colors mt-1 inline-block font-body" data-testid="upload-instead">
+                    {linkFailed ? 'Upload the video file instead →' : 'Switch to Upload Raw Video →'}
                   </a>
                 )}
               </div>
@@ -508,9 +531,11 @@ export default function AnalyseLink() {
                     : 'bg-foreground/5 text-foreground/20 cursor-not-allowed'
                 }`}
               >
-                Break Down This Video →
+                {intent === 'competitor' ? 'Break Down This Video →' : 'Break Down My Reel →'}
               </button>
             </div>
+
+            {STUDIO_MODE && <p className="mt-4 text-center text-[12px] text-foreground/35 font-body" data-testid="estimate">{ESTIMATE}</p>}
 
             {/* Subtle reassurance */}
             <div className="mt-8 flex items-center justify-center gap-6 text-[10px] text-foreground/20 font-body">

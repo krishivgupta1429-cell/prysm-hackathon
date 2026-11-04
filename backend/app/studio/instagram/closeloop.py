@@ -162,7 +162,7 @@ async def list_analyses(db, user_id, limit: int = 20) -> list[dict]:
             res = await db.execute(text(
                 "SELECT id, created_at, overall_score, summary, top_priorities, parameters, edited_video_key, "
                 "(raw_result::jsonb -> 'energyCurve' ->> 'duration') AS dur, intent "
-                "FROM prysm_analyses WHERE user_id = :u ORDER BY created_at DESC LIMIT :n"), {"u": str(user_id), "n": limit})
+                "FROM prysm_analyses WHERE user_id = :u AND intent IS DISTINCT FROM 'competitor' ORDER BY created_at DESC LIMIT :n"), {"u": str(user_id), "n": limit})
             rows = res.mappings().all()
     except Exception as e:
         log.info("[CloseLoop] analyses unavailable: %s", type(e).__name__)

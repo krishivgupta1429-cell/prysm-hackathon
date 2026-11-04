@@ -1,0 +1,46 @@
+# Upload vs "study a reel" (link): what the baseline already does, and what was added
+
+Built during the Meta Global AI Developer Hackathon (new work). Written before the change, from the baseline code in this repo. The finding that shaped everything: **the baseline already contains the whole flow**, so the hackathon app reuses it unchanged and only adds a switch, hardening and three small features.
+
+## The baseline, file by file
+
+| What you see on the platform | Baseline file | What it does |
+|---|---|---|
+| Dashboard action cards: **Upload video** ("Analyse before you post"), **Paste a link** ("Study any Instagram reel"), **Chat with Prysm** | `web/src/pages/Dashboard.tsx` (the `grid` of three cards, about line 553) | Three links; the link card is filtered out when `ALLOW_LINKS` is false |
+| Tabs **My Videos** / **Reel Breakdowns** | `Dashboard.tsx` (`isOwnVideo`, `ownAnalyses`, `competitorAnalyses`, about lines 67 and 399) | A saved analysis is "own" when `intent` is `my_video` (or, with no intent, when it was an upload); everything else is a reel breakdown. The Reel Breakdowns tab is shown only when links are on |
+| "What do you want to analyse?" chooser (Upload your video / Study a reel) | `web/src/pages/Analyse.tsx` | Two cards and the keyboard shortcuts U and L |
+| The **3-step link flow**: paste the link, niche, then **"What caught your eye? What do you want to learn from this video?"** and the **Break Down This Video** button with the footer "10 parameters / Format breakdown / Replicable takeaways" | `web/src/pages/AnalyseLink.tsx` (steps 1, 3 and 4; the progress dots are 1, 3, 4) | Posts a form (`url`, `niche`, `platform`, `brief`, `intent`) to `POST /prysm/analyse`, gets a `job_id` in about 5 seconds, polls `GET /prysm/analyse/status/{job_id}` every 5 seconds, then opens `/results`. The page's `intent` is the constant `competitor` |
+| Upload flow | `web/src/pages/AnalyseUpload.tsx` | Same submit and poll, with the file and `intent=my_video` |
+| Processing screen with an estimated time ("Most analyses take 2-3 minutes", minutes left) and, in demo mode, real stage progress | `web/src/components/PrismProcessing.tsx` (+ `studio/progress.ts`) | Shared by both flows |
+| **A studied reel's result page** | `web/src/pages/Results.tsx` (`isCompetitor` branches) | "10-Parameter Analysis"; "Techniques That Made This Go Viral" with "Key takeaways for your content" (the replicable takeaways); "Your Next Video Blueprint" (the format breakdown: hook, structure, audio, location and setup, text overlays, call to action, from `nextVideoTemplate`); "Their Strategy - Use This" (hashtags and caption). Plan-gated sections are open in demo mode |
+| The backend that produces the breakdown | `backend/app/routers/prysm.py` `POST /analyse` (about line 496) and the worker `_run_analysis_task`; `backend/app/services/prysm_analyse_service.py` | The router checks the link (Instagram, TikTok or YouTube only), counts 20 links per user per day, downloads the reel (`extract_post_metadata` + `download_video`: **Apify first, yt-dlp second**), refuses reels over 5 minutes, queues the job in Redis. The service runs the same pipeline as an upload (frames, vision, transcript, audio, trends) and then two scoring calls. For `intent == "competitor"` it switches to the "viral video blueprint" prompts (positive framing, banned negative phrases), asks for the `nextVideoTemplate`, and skips the suggestion validator |
+| Save and list | `routers/prysm.py` `GET /dashboard`, `GET /dashboard/{id}` | Saved with `intent`, `source_type = "link"`, `source_url` and the post metadata (likes, views, uploader) |
+
+Already in the hackathon copy of the baseline before this change: `STUDIO_ALLOW_LINKS` on the backend (a gate on `POST /analyse`, default **on**), `VITE_STUDIO_ALLOW_LINKS` on the website (default off in demo mode), `ALLOW_LINKS` in `web/src/lib/config.ts`. Unchanged and reused as they are: every page above, the prompts, the download code, the results layout, the dashboard tabs and the processing screen. In demo mode the Meta models already serve all the Claude calls through the shim, so a studied reel is already produced by Spark.
+
+Names: the platform's wording for the studied-reel result is in the code as "Techniques That Made This Go Viral / Key takeaways" and "Your Next Video Blueprint". The footer line "Format breakdown / Replicable takeaways" is the platform's own short name for them. Nothing was renamed.
+
+## What is new
+
+1. **The switch.** `STUDIO_ALLOW_LINKS` now defaults to **off** in code (set `1` to enable); with it off the backend answers a link with a plain "switched off" message and the website hides the cards and the tab, and (baseline behaviour, unchanged) sends `/analyse/link` to the upload page. The website has its own build-time switch, `VITE_STUDIO_ALLOW_LINKS=1`; set both.
+2. **Failures, time and limits.** The baseline downloaded inside the request with no overall limit. Now the download runs in a worker thread with a time limit (`STUDIO_LINK_DOWNLOAD_TIMEOUT_S`, default 100 s) and any failure becomes one plain message: "Instagram blocked this link, so Prysm could not fetch the reel. Upload the video file instead." (or "...took too long..."), with an "Upload the video file instead" link. A link that could not be fetched does not use up the day's allowance. The fixed 20 links per day is now `STUDIO_LINK_DAILY_LIMIT` (default 20; the deploy checklist suggests 5). Studied reels also go through the existing safety net like uploads: daily spend cap, one running analysis per user, hourly and daily per-user limits, sign-up limit. The Apify download itself is not part of that cost cap.
+3. **Estimated time.** The processing screen already had one. The last step now also says "Usually takes 3 to 5 minutes." (see "Timing" below).
+4. **My own reel** (new choice at step 1 of the link flow): "A reel I want to study" (the baseline flow) or "My own reel". For an own reel the website offers **Pick from my connected Instagram reels**: the same reel cards as the Creator DNA page (thumbnail, date, real numbers, "vs your usual"), or a **Connect Instagram** call to action, and you can still paste the link. An own reel is sent with `intent=my_video`, the baseline's own-link path (it lands under My Videos, with the post-mortem tone, and can use Creator DNA personalisation as any own video does).
+5. **A studied reel is someone else's video**, so:
+   * the coach style and Creator DNA addenda are not added to its prompts (the baseline blueprint prompts run exactly as written) and the step regeneration retry is skipped (it uses the coach style);
+   * no "compared with your reels" block, and it is not offered under "Did my fix work?";
+   * no auto-edit (auto-edit only ever ran for uploads; unchanged);
+   * the downloaded file is deleted after the analysis (the work folder was always removed), and now **only the result text is kept**: no still frame, no frames, no visual embedding is saved for a studied reel (its dashboard card has no thumbnail);
+   * it is not added to Creator DNA (Creator DNA is built only from the reels imported from the creator's own account).
+6. **"How to adapt this to your niche"** on a studied reel, only when Instagram is connected with a usable Creator DNA: up to three short bullets from the creator's own DNA, with the fixed note **"Borrow the structure, not the content."** Every bullet that talks about the creator's reels must be grounded in them (same check as the comparison block); a bullet that is not grounded is dropped, and if none is left or the call fails the card is simply absent. It costs one small Spark call (about half a cent).
+
+## Timing
+
+The estimate on the last step ("Usually takes 3 to 6 minutes. A longer reel can take up to 9.") comes from the saved analyses on the local stack (`prysm_analyses.processing_time_sec`, Spark 1.3, 12 runs, 2 to 3 November): median 223 s, fastest 118 s, slowest 516 s. By kind: 9 uploads 118 to 392 s; own-reel links 123 and 128 s; the one studied reel (a 15.8 MB reel, 23 s of it the download) 516 s with the machine busy. The studied-reel prompts are longer (more output), so it is also the dearest run: **$0.47** against $0.25 to $0.34 for an upload (cost in `prysm_analyses.total_cost_usd`). At the suggested $10 a day that is about 20 studied reels. Only one studied reel was timed, so treat 9 minutes as a ceiling seen once, not a promise.
+
+## Not covered / limits
+
+* Only Instagram, TikTok and YouTube links are accepted (the baseline list). The Apify actor is the baseline's; Instagram may still block it, and then the message above appears.
+* A download that times out cannot be cancelled inside the worker thread; it finishes in the background and its file is removed with the work folder.
+* The baseline's older `POST /media/link` (a Celery-based link route that the demo's website does not use) is behind the same switch. No other route accepts a reel URL.
+* The own-reel picker analyses the reel by its public Instagram link (the same download as any link), not by the video file Instagram's API may return.

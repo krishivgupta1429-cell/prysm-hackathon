@@ -73,7 +73,10 @@ There is **no separate queue worker process**. The analysis queue is a Redis lis
 | `AUTO_EDIT_ENABLED` | no | default on; `0` runs without edited videos (then no R2 variables are needed) |
 | `STUDIO_UNLIMITED` | demo | `1`: no plans, credits or pricing; the cost caps below protect your spend |
 | `DEMO_AUTO_VERIFY` | yes (or `BREVO_API_KEY`) | `1`: new accounts are verified at once. Without it and without an email key nobody can verify an account. |
-| `STUDIO_ALLOW_LINKS` | demo | `0` for a public demo (reel links download other people's videos through Apify/yt-dlp and need `APIFY_API_TOKEN`). Set `1` only if you also set `APIFY_API_TOKEN` and `VITE_STUDIO_ALLOW_LINKS=1` on Vercel. |
+| `STUDIO_ALLOW_LINKS` | no | **Default 0 (off) in code**: unset or empty means off, uploads only. Set `1` to turn on "study any reel" (paste a link): it downloads other people's reels through Apify and yt-dlp, so it also needs `APIFY_API_TOKEN` and `VITE_STUDIO_ALLOW_LINKS=1` on Vercel (the website switch is separate and set at build time; set both or neither). See `docs/link-flow-notes.md`. |
+| `APIFY_API_TOKEN` | only with links on | <https://console.apify.com/account/integrations>. Apify bills per run and is not part of the spend cap below; set a monthly limit in the Apify console. |
+| `STUDIO_LINK_DAILY_LIMIT` | no | link analyses one user can start per day (default 20; suggested 5 for a public demo) |
+| `STUDIO_LINK_DOWNLOAD_TIMEOUT_S` | no | seconds to wait for a reel download before the plain "upload the file instead" message (default 100) |
 | `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` | for GPU signals | section E |
 | `ENGAGEMENT_BACKEND` | yes with Modal | `modal` (or `heuristic` to skip the GPU models). Never `runpod` (the old worker that silently made up numbers). |
 | `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`, `INSTAGRAM_REDIRECT_URI`, `INSTAGRAM_FRONTEND_URL` | only for Instagram | section F. If `INSTAGRAM_APP_ID` is set the other three are required and checked. |
@@ -103,7 +106,7 @@ Railway sets `PORT` itself.
 | `VITE_API_URL` | yes | the Railway backend URL, `https://<name>.up.railway.app`, no trailing slash. All API calls go there directly; `web/vercel.json` is only the single-page-app fallback. |
 | `VITE_UPLOAD_URL` | yes | the same URL (video uploads skip Vercel's 4.5 MB request limit) |
 | `VITE_SUPPORT_EMAIL` | recommended | your contact address (otherwise `support@example.com` shows) |
-| `VITE_STUDIO_ALLOW_LINKS` | no | `1` only together with the backend's `STUDIO_ALLOW_LINKS=1` |
+| `VITE_STUDIO_ALLOW_LINKS` | no | `1` only together with the backend's `STUDIO_ALLOW_LINKS=1` (off: no "Paste a link" card, no "Reel Breakdowns" tab, `/analyse/link` goes to the upload page) |
 | `VITE_FOUNDER_EMAIL` | no | your email, to show the cost panel to you only |
 | `VITE_SOCIAL_X`, `VITE_SOCIAL_LINKEDIN`, `VITE_SOCIAL_INSTAGRAM` | no | footer links; hidden when unset |
 | `VITE_PUBLIC_POSTHOG_KEY`, `VITE_PUBLIC_POSTHOG_HOST`, `VITE_PUBLIC_CLARITY_ID` | no | analytics; off when unset |

@@ -14,6 +14,7 @@ import { STUDIO_MODE } from '@/lib/config'
 import CostPanel from '@/studio/CostPanel'
 import { parseMarkedSteps } from '@/studio/steps'
 import ViewerBehaviourCard from '@/studio/ViewerBehaviourCard'
+import AdaptCard, { type AdaptBlock } from '@/studio/AdaptCard'
 import { CreatorDnaCard, PersonalisedTag, type CreatorDnaBlock } from '@/studio/CreatorDnaCard'
 
 interface Parameter {
@@ -83,6 +84,7 @@ interface Result {
   energyCurve?: EnergyCurve
   frames?: Frame[]
   first_frame_b64?: string
+  adaptToMyNiche?: AdaptBlock   // hackathon: studied reels only, when Instagram is connected
   nextVideoTemplate?: {
     hook?: string
     structure?: string
@@ -1546,6 +1548,8 @@ export default function Results({ injected }: { injected?: Record<string, unknow
             )}
 
             {/* ═══ TRENDING SECTION ═══ */}
+            {isCompetitor && result.adaptToMyNiche && <AdaptCard block={result.adaptToMyNiche} />}
+
             {hasTrendingSection && !canSeeCaptions && (
               <div className="relative border border-border rounded-2xl p-5 mb-5 overflow-hidden" id="trending-section"
                 style={{ opacity: 0, animation: 'fade-slide-in 0.6s ease-out 200ms forwards' }}>

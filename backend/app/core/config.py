@@ -40,12 +40,14 @@ class Settings(BaseSettings):
     AUTO_EDIT_ENABLED: bool = True             # the baseline auto-edit + R2 upload step after an analysis; the hackathon env switches it off (AUTO_EDIT_ENABLED=0)
     STUDIO_MAX_CONCURRENT: int = 2             # analyses running at once across all processes (safety net)
     DEMO_AUTO_VERIFY: bool = False             # demo mode: new accounts are verified at once (no email provider needed)
-    STUDIO_ALLOW_LINKS: bool = True            # reel links (the baseline link flow). Off: uploads only
+    STUDIO_ALLOW_LINKS: bool = False           # "study any reel" (the baseline link flow, Apify/yt-dlp download). OFF unless set to 1: uploads only
     STUDIO_UNLIMITED: bool = False             # demo mode: no plans or credits; every user gets the full result (see studio/safety.py)
     STUDIO_DAILY_SPEND_CAP_USD: float = 10.0   # safety net: stop new analyses for the UTC day once their real cost adds up to this
     STUDIO_USER_MAX_CONCURRENT: int = 1        # safety net: analyses one user can have running at once
     STUDIO_USER_HOURLY_LIMIT: int = 10         # safety net: analyses one user can start per hour
     STUDIO_USER_DAILY_LIMIT: int = 0           # safety net: analyses one user can start per UTC day (0 = no limit; a public deployment sets it)
+    STUDIO_LINK_DAILY_LIMIT: int = 20          # link analyses one user can start per day (the baseline's fixed 20; a public demo sets it lower)
+    STUDIO_LINK_DOWNLOAD_TIMEOUT_S: int = 100  # give up downloading a linked reel after this many seconds ("upload the file instead")
     STUDIO_REGISTER_PER_IP_HOURLY: int = 5     # safety net: sign-ups per IP per hour
 
     @property
