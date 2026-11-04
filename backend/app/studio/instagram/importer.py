@@ -81,6 +81,24 @@ async def start_import(redis, user_id: str, count: int) -> tuple[str | None, str
     return job_id, None
 
 
+async def _embed_reel(video: str, media_id: str, state: dict) -> None:
+    """Never raises. Result goes to state["embeddings"][media_id]; state["dino_off"] stops later reels after the first failure."""
+    if state.get("dino_off"):
+        return
+    try:
+        from app.studio.dino import wire
+        emb = await wire.embed_for_import(video)
+        if emb is None:
+            state["dino_off"] = True
+            return
+        state.setdefault("embeddings", {})[media_id] = emb
+        usage = emb.get("usage") or {}
+        state["dino_usd"] = round(state.get("dino_usd", 0.0) + float(usage.get("est_cost_usd") or 0.0), 6)
+    except Exception as e:
+        state["dino_off"] = True
+        log.info("[Import] picture embedding skipped: %s", type(e).__name__)
+
+
 async def _one_reel(src, raw: dict, idx: int, spend: D.Spend, sem: asyncio.Semaphore, progress, state: dict) -> dict:
     """Everything for one reel. Never raises except RateLimited/TokenInvalid (kept in `state`)."""
     stage = f"reel_{idx:02d}"
@@ -103,12 +121,18 @@ async def _one_reel(src, raw: dict, idx: int, spend: D.Spend, sem: asyncio.Semap
             if all(v is None for v in rec["insights"].values()):
                 notes.append("Instagram returned no insights for this reel (data can lag up to 48 hours).")
             async def hook_step(video, tmp):
-                # the first ~12 s of speech as text (Voice Transcribe, the pipeline's own client); the audio is cut inside the temp folder
-                if hasattr(src, "fixture_hook_words"):
-                    return src.fixture_hook_words(raw)
-                if spend.usd >= spend.cap:
-                    return H.HookResult("unknown")
-                return await H.transcribe_hook(video, tmp)
+                # DINOv2 picture embedding of this reel (non-blocking: any failure, a slow service or DINO_BACKEND=off only
+                # means no embedding; the first failure stops further tries for this import)
+                embed_task = asyncio.create_task(_embed_reel(video, raw["id"], state))
+                try:
+                    # the first ~12 s of speech as text (Voice Transcribe, the pipeline's own client); the audio is cut inside the temp folder
+                    if hasattr(src, "fixture_hook_words"):
+                        return src.fixture_hook_words(raw)
+                    if spend.usd >= spend.cap:
+                        return H.HookResult("unknown")
+                    return await H.transcribe_hook(video, tmp)
+                finally:
+                    await embed_task   # the video must still exist; _embed_reel never raises
             jpegs, dur, hook = await F.read_reel(lambda p: src.download(raw, p), on_video=hook_step)
             rec["duration_s"] = dur
             if hook is not None:
@@ -203,13 +227,21 @@ async def run_import(*, redis, session_factory, user_id: str, count: int, job_id
                 acct.profile_picture_url = pic
             await _replace_data(db, acct, recs, built, agg, spend, len(raws), count, state)
             await db.commit()
+        # DINOv2 embeddings of the reels just imported (own session; soft: never fails the import)
+        embedded = 0
+        try:
+            from app.studio.dino import wire
+            embedded = await wire.save_reel_embeddings(session_factory, user_id, state.get("embeddings") or {}, [r["media_id"] for r in recs])
+        except Exception as e:
+            log.info("[Import] saving picture embeddings skipped: %s", type(e).__name__)
         if record_spend and spend.usd:
             await record_spend(spend.usd)
         summary = {"status": "done", "imported": len(recs), "requested": count, "missing_metrics": agg["missing"],
                    "partial": sum(1 for r in recs if r.get("analysis_level") != "full"),
                    "rate_limited": bool(state.get("rate_limited")), "token_invalid": bool(state.get("token_invalid")),
                    "cost_usd": spend.usd, "model_calls": spend.calls, "hook_words_read": sum(1 for r in recs if r.get("hook_words_status") == "transcribed"),
-                   "transcribed_reels": spend.transcribed, "transcribe_usd": spend.transcribe_usd}
+                   "transcribed_reels": spend.transcribed, "transcribe_usd": spend.transcribe_usd,
+                   "picture_embeddings": embedded, "picture_embeddings_usd": state.get("dino_usd", 0.0)}
         await _job_write(redis, job_id, **summary)
         return summary
     except TokenInvalid:

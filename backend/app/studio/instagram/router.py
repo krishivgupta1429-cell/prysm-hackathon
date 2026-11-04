@@ -170,6 +170,62 @@ async def start_import(body: ImportBody, request: Request, user: User = Depends(
     return {"jobId": job_id, "count": count}
 
 
+@router.get("/embeddings/status")
+async def embeddings_status(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """How many imported reels have a DINOv2 picture embedding (the Creator DNA page's "backfill embeddings" button)."""
+    from app.studio.dino import wire
+    return await wire.status(db, user.id)
+
+
+@router.post("/embeddings/backfill")
+async def embeddings_backfill(request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Picture embeddings for reels imported before this existed. Downloads each missing reel again (temporary), embeds it on
+    the Modal GPU (cents for a whole account) and deletes the video. Same one-job-at-a-time lock as the import; poll /import/{jobId}."""
+    from app.studio.dino import wire
+    acct, source = await _source_for(db, user, request)
+    st = await wire.status(db, user.id)
+    if not st.get("reels"):
+        raise HTTPException(409, "Import your reels first.")
+    job_id, why = await importer.start_import(redis_client, str(user.id), st["reels"])
+    if not job_id:
+        raise HTTPException(409, why)
+
+    async def run():
+        summary = {"status": "error", "error": "The backfill failed."}
+        try:
+            summary = await wire.backfill(session_factory=AsyncSessionLocal, user_id=user.id, source=source)
+        except Exception as e:
+            log.warning("[Backfill] failed: %s", type(e).__name__)
+        finally:
+            await importer._job_write(redis_client, job_id, kind="backfill", **summary)
+            try:
+                await redis_client.delete(importer.LOCK_KEY.format(user.id))
+            except Exception:
+                pass
+            await source.aclose()
+
+    t = asyncio.create_task(run())
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+    return {"jobId": job_id, "missing": st["reels"] - st["embedded"]}
+
+
+@router.get("/closest/{analysis_id}")
+async def closest_reel(analysis_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """"Closest to your Reel N" for the results page: the user's own reels ranked by how similar the pictures look, with each
+    reel's real stored numbers in words. Ranks by looks, not results."""
+    import uuid as _uuid
+    from app.studio.dino import wire
+    try:
+        aid = _uuid.UUID(analysis_id)
+    except ValueError:
+        raise HTTPException(404, "Unknown analysis.")
+    out = await wire.closest_payload(db, user.id, aid)
+    if not out.get("found"):
+        raise HTTPException(404, "Unknown analysis.")
+    return out
+
+
 @router.get("/import/{job_id}")
 async def import_status(job_id: str, user: User = Depends(get_current_user)):
     job = await importer.job_status(redis_client, job_id)

@@ -285,6 +285,11 @@ async def _delete_derived(db, acct: IgAccount) -> dict:
     await db.execute(delete(CreatorDna).where(CreatorDna.account_id == acct.id))
     counts["links"] = (await db.execute(delete(IgFixLink).where(IgFixLink.user_id == acct.user_id))).rowcount or 0
     await db.execute(delete(IgReel).where(IgReel.account_id == acct.id))
+    try:   # DINOv2 picture embeddings of the reels are derived data too
+        from app.studio.dino import wire
+        counts["picture_embeddings"] = await wire.delete_embeddings(db, acct.user_id)
+    except Exception as e:
+        log.info("[Instagram] picture embeddings not deleted: %s", type(e).__name__)
     return counts
 
 
