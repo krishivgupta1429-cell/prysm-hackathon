@@ -149,6 +149,8 @@ The card that showed Hook Hold Rate (ECR) and Average Watch Rate (NAWP) used a R
 
 `docs/link-flow-notes.md` lists which baseline files do what: the baseline already had the whole flow (dashboard cards, the 3-step link flow, the Reel Breakdowns tab, the studied-reel result with takeaways and blueprint, the Apify/yt-dlp download), and all of it is reused. New: the switch `STUDIO_ALLOW_LINKS` (default off; `VITE_STUDIO_ALLOW_LINKS` on the website), a time limit and one plain failure message for a link Instagram will not give, `STUDIO_LINK_DAILY_LIMIT`, the "My own reel" choice with a picker of the connected Instagram reels, the "How to adapt this to your niche" card from Creator DNA ("Borrow the structure, not the content."), and the rules for a studied reel (no coach style or DNA in its prompts, no auto-edit, not in Creator DNA or the comparisons, only its result text is kept). Browser check: `scripts/e2e_link_flow.mjs` (links on and off, desktop and mobile).
 
+`docs/dashboard-notes.md` compares the dashboard with the baseline: the hackathon dashboard is the baseline page plus five demo-mode edits (credits meter hidden, links switch, support email, plans unlocked, plan shown as unlimited). The coach card, "Your best vs latest" and "Your score over time" are baseline features that appear only with 3, 2 and 2 or more own videos; the coach text is built in the browser from saved scores (no model call). Browser check: `scripts/e2e_dashboard.mjs`.
+
 ## Deployment (Railway + Vercel + R2)
 
 `docs/deploy-checklist.md` lists every variable (names only), where each value comes from and which are required. What was added for it:
