@@ -2,6 +2,7 @@
 // The results-page card "How this compares to your last N reels", and the small "Personalised from your reels" tag.
 // Plain-language numbers (reach vs the creator's usual, watch-through) and the real first spoken words of the reels it cites.
 // Patterns in a small sample, never proof. Uses the app's own look.
+import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
 export type CreatorDnaBlock = {
@@ -47,7 +48,7 @@ function ReelLine({ r }: { r: NonNullable<CreatorDnaBlock['citedReels']>[number]
   )
 }
 
-export function CreatorDnaCard({ block }: { block: CreatorDnaBlock }) {
+export function CreatorDnaCard({ block, extra }: { block: CreatorDnaBlock; extra?: ReactNode }) {
   const cited = block.citedReels || []
   const strong = cited.filter(c => c.group === 'strongest'), weak = cited.filter(c => c.group === 'weakest')
   return (
@@ -102,6 +103,7 @@ export function CreatorDnaCard({ block }: { block: CreatorDnaBlock }) {
           {block.grounding.rewritten ? `, ${block.grounding.rewritten} rewritten` : ''}{block.grounding.dropped ? `, ${block.grounding.dropped} removed` : ''}.
         </p>
       )}
+      {extra}
       <p className="text-[12px] mt-3 font-body"><Link to="/creator-dna" className="font-bold underline underline-offset-2 text-foreground/70 hover:text-foreground">Open your reels and Creator DNA</Link></p>
     </div>
   )

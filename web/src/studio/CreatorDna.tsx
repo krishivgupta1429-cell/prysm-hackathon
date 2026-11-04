@@ -13,6 +13,7 @@ import { Consent } from './creator/Consent'
 import { DnaCard } from './creator/DnaCard'
 import { FixLoop } from './creator/FixLoop'
 import { ImportCard } from './creator/ImportCard'
+import { PictureMatching } from './creator/PictureMatching'
 import { ReelCard } from './creator/ReelCard'
 import type { DnaResp, Job, Status } from './creator/types'
 
@@ -163,6 +164,8 @@ export default function CreatorDna() {
 
             <ImportCard ref={importRef} count={count} setCount={setCount} min={status.limits.min} max={maxCount} available={avail} busy={busy}
               hasImport={!!status.account?.lastImportAt} job={job} fixture={fixture} onStart={startImport} />
+
+            {reels.length > 0 && <PictureMatching reloadKey={reloadKey} busy={busy} />}
 
             {dna?.dna && dna.dna.data.mode === 'breakdown' && (
               <div className="rounded-2xl border border-border bg-background p-5" data-testid="breakdown-note">

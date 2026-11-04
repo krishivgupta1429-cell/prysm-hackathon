@@ -165,6 +165,7 @@ async def _run_analysis_task(
 
     start_time = time.time()
     global_slot_held = False
+    dino_task = None   # hackathon: DINOv2 picture embedding + attention strip, run beside the analysis (soft)
     # Track Stage 1 cost already deducted mid-pipeline so the final settlement
     # only charges the remaining Stage 2 cost (avoids double-charging).
     stage1_already_charged_usd = 0.0
@@ -218,6 +219,12 @@ async def _run_analysis_task(
                 dna_addendum = _pz.addendum(await _pz.load(_dna_db, _uuid.UUID(str(user_id))))
         except Exception as _dna_err:
             _log.warning(f"[Prysm] Creator DNA addendum skipped for job {job_id}: {type(_dna_err).__name__}")
+        try:
+            from app.studio.dino import wire as _dino_wire
+            if _dino_wire.wire_enabled():
+                dino_task = asyncio.create_task(_dino_wire.analyse_video(video_path))
+        except Exception as _dino_err:
+            _log.info(f"[Prysm] DINO wiring skipped for job {job_id}: {type(_dino_err).__name__}")
         result = await run_full_analysis(
             video_path=video_path,
             niche=niche,
@@ -231,6 +238,14 @@ async def _run_analysis_task(
             progress_cb=progress,
             creator_dna_addendum=dna_addendum,
         )
+        # Hackathon: the attention strip (estimates) joins the result; the embedding is stored once the analysis row exists
+        dino_embedding = None
+        if dino_task is not None:
+            from app.studio.dino import wire as _dino_wire
+            _dino = await _dino_wire.run_analysis_part(dino_task)
+            dino_embedding = _dino.get("embedding")
+            if _dino.get("attention"):
+                result["viewerAttention"] = _dino["attention"]
         # Hackathon: "How this compares to your last N reels" block (fails soft; its small model cost is added to the analysis cost)
         if dna_addendum:
             try:
@@ -360,6 +375,9 @@ async def _run_analysis_task(
 
         result["analysis_id"] = str(analysis_id)
         result["job_id"] = str(analysis_id)
+        if dino_embedding:   # hackathon: stored for "Closest to your Reel N" (soft)
+            from app.studio.dino import wire as _dino_wire
+            await _dino_wire.save_for_analysis(AsyncSessionLocal, analysis_id, dino_embedding)
 
         # ── Auto-edit: apply suggestions to video via FFmpeg, upload to R2 ──
         # Only for uploaded videos (not link analyses — we don't keep downloaded copies)
@@ -453,6 +471,8 @@ async def _run_analysis_task(
         _log.error(f"[Prysm] Job {job_id} failed: {e}\n{traceback.format_exc()}")
         await cache_set(f"prysm:job:{job_id}", {"status": "failed", "error": str(e)}, ttl=3600)
     finally:
+        if dino_task is not None and not dino_task.done():
+            dino_task.cancel()
         shutil.rmtree(work_dir, ignore_errors=True)
         if settings.META_MODE:
             from app.studio import safety

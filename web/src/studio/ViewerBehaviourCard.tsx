@@ -11,6 +11,7 @@ import { Link } from 'react-router-dom'
 import { apiUrl } from '@/lib/api'
 import { authFetch, getToken } from '@/lib/auth'
 import { SHOW_QWEN_CARD } from '@/lib/config'
+import AttentionStrip, { type ViewerAttention } from './AttentionStrip'
 
 export type QAlign = { quality: number; aesthetic: number; band: string; scale?: number[]; source?: string }
 export type Engagement = {
@@ -92,7 +93,7 @@ function Stat({ label, value, note }: { label: string; value: string; note: stri
   )
 }
 
-export default function ViewerBehaviourCard({ ep }: { ep?: Engagement | null }) {
+export default function ViewerBehaviourCard({ ep, attention }: { ep?: Engagement | null; attention?: ViewerAttention | null }) {
   const [m, setM] = useState<Measured | null | undefined>(undefined)
   useEffect(() => {
     if (!getToken()) { setM(null); return }
@@ -134,6 +135,7 @@ export default function ViewerBehaviourCard({ ep }: { ep?: Engagement | null }) 
             <Bar label="Average Watch Rate" value={ep!.nawp as number} caption={RETAIN[ep!.retention_risk || 'medium']} note="% of the video the average viewer is predicted to watch" />
           </div>
         )}
+        {attention && <AttentionStrip a={attention} />}
       </div>
       {ep?.qalign && <QualityPanel q={ep.qalign} />}
     </div>
