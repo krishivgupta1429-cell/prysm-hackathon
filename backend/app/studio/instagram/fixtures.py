@@ -147,6 +147,9 @@ class FixtureSource:
             })
         return out
 
+    async def count_reels(self, stop_at: int = 30) -> tuple[int, bool]:
+        return N_FIXTURE, True
+
     async def insights(self, media_id: str) -> dict[str, Optional[float]]:
         return _insights(int(media_id.split("_")[1]) - 1)
 

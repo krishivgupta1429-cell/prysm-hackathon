@@ -188,7 +188,8 @@ def header(prep: dict, basis: str | None, missing: list[str]) -> str:
                      "no hook, format or pacing judgement.")
     if missing:
         parts.append("Instagram returned nothing for: " + ", ".join(M.METRIC_LABEL[m] for m in missing) + ".")
-    parts.append("These are patterns in a small sample, not proof.")
+    if n >= M.MIN_FOR_DNA:
+        parts.append("These are patterns in a small sample, not proof.")
     if prep["outlier"]:
         parts.append("One reel did far better than the rest; the comparison uses medians so it does not define your normal.")
     return " ".join(parts)
@@ -331,8 +332,13 @@ async def build_dna(reels: list[dict], basis: str | None, missing: list[str], sp
     """Returns {"dna": {...}, "summary": str, "sample_size": n}. The model is called once, and only when there is enough to rank."""
     prep = prepare(reels)
     hdr = header(prep, basis, missing)
-    if prep["n"] < M.MIN_FOR_PATTERNS:
-        dna = descriptive_dna(prep, basis, missing, f"Only {prep['n']} reel{'s' if prep['n'] != 1 else ''}: too few to call anything a pattern.")
+    if prep["n"] < M.MIN_FOR_DNA:   # 1-2 reels: the per-reel breakdown only, no pattern claim of any kind
+        dna = {"mode": "breakdown", "reason": "Patterns need at least 3 reels.", "shared": [], "strongest": [], "weakest": [], "keep": [],
+               "change": [], "sample_size": prep["n"], "scored": prep["scored"], "outlier": False,
+               "partial_reels": prep.get("partial", [])}
+        return {"dna": dna, "summary": hdr + " " + dna["reason"], "sample_size": prep["n"], "prep": prep}
+    if prep["n"] < M.MIN_FOR_PATTERNS:   # 3-4 reels: what the reels have in common, worded as early observations
+        dna = descriptive_dna(prep, basis, missing, f"Only {prep['n']} reels: these are early observations, not patterns.")
         return {"dna": dna, "summary": hdr + " " + dna["reason"] + (" " + "; ".join(f"{s['claim']} (Reels {', '.join(map(str, s['reels']))})" for s in dna["shared"]) + "." if dna["shared"] else ""),
                 "sample_size": prep["n"], "prep": prep}
     if not prep["top"]:

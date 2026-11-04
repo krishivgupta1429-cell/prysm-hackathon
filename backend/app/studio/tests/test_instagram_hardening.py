@@ -493,3 +493,54 @@ def test_legacy_rows_without_a_level_are_derived_from_duration_and_frames():
     assert personalise.level_of(Row(None, 12.0, 6)) == "full"
     assert personalise.level_of(Row(None, None, 1)) == "thumbnail_caption"
     assert personalise.level_of(Row(None, None, 0)) == "caption_only"
+
+
+# =================================================================== phase 1: limits and honesty
+
+@aio
+async def test_one_or_two_reels_get_the_breakdown_only_and_no_pattern_claim(monkeypatch):
+    async def never(*a, **k):
+        raise AssertionError("no model call for fewer than 3 reels")
+    monkeypatch.setattr(D, "_ask", never)
+    for n in (1, 2):
+        out = await D.build_dna([mk(i, fingerprint=fp(), wt=0.5) | {"posted_at": f"2026-10-{30 - i:02d}T10:00:00+00:00"} for i in range(1, n + 1)],
+                                "reach", [], D.Spend(1))
+        d = out["dna"]
+        assert d["mode"] == "breakdown" and d["reason"] == "Patterns need at least 3 reels."
+        assert d["shared"] == [] and d["strongest"] == [] and d["weakest"] == [] and d["keep"] == [] and d["change"] == []
+        assert f"Based on your {n} most recent imported reel" in out["summary"] and "Patterns need at least 3 reels." in out["summary"]
+        assert "not proof" not in out["summary"] and "same hook" not in out["summary"]
+        assert personalise.usable({"dna": type("R", (), {"dna": d})()}) is False                  # never used to personalise answers
+
+
+@aio
+async def test_three_reels_show_the_dna_with_the_count_in_the_header(monkeypatch):
+    async def never(*a, **k):
+        raise AssertionError("no model call below 5 reels")
+    monkeypatch.setattr(D, "_ask", never)
+    out = await D.build_dna([mk(i, fingerprint=fp()) | {"posted_at": f"2026-10-{30 - i:02d}T10:00:00+00:00"} for i in range(1, 4)], "reach", [], D.Spend(1))
+    assert out["dna"]["mode"] == "descriptive" and out["summary"].startswith("Based on your 3 most recent imported reels")
+    assert out["dna"]["shared"]                                                                    # "3 of 3 reels use the same hook: ..."
+
+
+def test_import_count_limits_are_1_to_30_with_a_default_of_10():
+    assert (importer.MIN_COUNT, importer.MAX_COUNT, importer.DEFAULT_COUNT) == (1, 30, 10)
+    assert [importer.clamp_count(x) for x in (0, 1, 2, 30, 31, "7", None, "x")] == [1, 1, 2, 30, 30, 7, 10, 10]
+
+
+@aio
+async def test_count_reels_counts_only_reels_in_one_call_and_stops_at_the_limit():
+    import httpx
+    from app.studio.instagram import graph
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        data = [{"id": str(i), "media_type": "VIDEO", "media_product_type": "REELS" if i % 2 == 0 else "FEED"} for i in range(100)]
+        return httpx.Response(200, json={"data": data, "paging": {"next": "https://graph.instagram.com/next"}})
+    src = graph.InstagramSource("tok", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert await src.count_reels(30) == (50, False) and len(calls) == 1                           # 50 reels in the first page: stop there
+    few = graph.InstagramSource("tok", httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, json={"data": [{"id": "1", "media_type": "VIDEO", "media_product_type": "REELS"},
+                                                      {"id": "2", "media_type": "IMAGE", "media_product_type": "FEED"}]}))))
+    assert await few.count_reels(30) == (1, True)                                                  # the whole account has one reel

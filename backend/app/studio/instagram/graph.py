@@ -83,6 +83,29 @@ class InstagramSource:
             url, params = nxt, None   # the cursor URL already carries every parameter
         return reels
 
+    async def count_reels(self, stop_at: int = 30) -> tuple[int, bool]:
+        """(reels found, complete). Cheap: pages of 100 with only the type fields, stops as soon as `stop_at` reels are seen
+        (usually one call). complete=False means "at least this many"."""
+        url, params = f"{GRAPH}/me/media", {"fields": "id,media_type,media_product_type", "limit": 100, "access_token": self._token}
+        found = 0
+        for _ in range(5):
+            r = await self._c.get(url, params=params)
+            _raise_for(r)
+            if r.status_code != 200:
+                raise RuntimeError(f"media count failed (HTTP {r.status_code}, code {_error(r).get('code')})")
+            j = r.json()
+            for m in j.get("data", []):
+                kind = m.get("media_product_type")
+                if kind == "REELS" or (kind is None and m.get("media_type") == "VIDEO"):
+                    found += 1
+            if found >= stop_at:
+                return found, False
+            nxt = (j.get("paging") or {}).get("next")
+            if not nxt:
+                return found, True
+            url, params = nxt, None
+        return found, False
+
     async def insights(self, media_id: str) -> dict[str, Optional[float]]:
         """{metric: value or None}. All metrics in one call; if Instagram refuses the combination, one call per metric.
         An empty `data` for a metric (or a refused metric) is None, never 0."""

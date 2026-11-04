@@ -104,6 +104,7 @@ export default function CreatorDna() {
   const [status, setStatus] = useState<Status | null>(null)
   const [dna, setDna] = useState<DnaResp | null>(null)
   const [count, setCount] = useState(10)
+  const [avail, setAvail] = useState<{ available: number | null; complete: boolean } | null>(null)
   const [job, setJob] = useState<Job | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -119,6 +120,15 @@ export default function CreatorDna() {
       const d = await authFetch(apiUrl('/instagram/dna'))
       if (d.ok) setDna(await d.json())
       if (st.account?.lastImportRequested) setCount(st.account.lastImportRequested)
+      try {   // how many reels the account has (one cached Instagram call at most)
+        const a = await authFetch(apiUrl('/instagram/available'))
+        if (a.ok) {
+          const av = await a.json()
+          setAvail(av)
+          const mx = Math.min(st.limits.max, av.available ?? st.limits.max)
+          setCount(c => Math.max(st.limits.min, Math.min(c, mx)))
+        }
+      } catch { /* the plain maximum is offered */ }
     } else setDna(null)
   }, [])
 
@@ -185,6 +195,7 @@ export default function CreatorDna() {
   }
 
   const fixture = !!(dna?.isFixture || status.account?.isFixture)
+  const maxCount = Math.max(status.limits.min, Math.min(status.limits.max, avail?.available ?? status.limits.max))
   const stages = job ? Object.entries(job.progress) : []
   const total = job ? 2 + (job.found ?? job.requested) : 0
   const done = stages.filter(([, v]) => v !== 'running').length
@@ -219,11 +230,15 @@ export default function CreatorDna() {
               <p style={p}>How many of your most recent reels should we import? More reels make the patterns steadier but cost a little more to process.</p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '12px 0' }}>
                 <button style={btnGhost} aria-label="fewer reels" disabled={busy || count <= status.limits.min} onClick={() => setCount(c => Math.max(status.limits.min, c - 1))}>−</button>
-                <input type="range" aria-label="number of reels" min={status.limits.min} max={status.limits.max} value={count} disabled={busy}
+                <input type="range" aria-label="number of reels" min={status.limits.min} max={maxCount} value={Math.min(count, maxCount)} disabled={busy || maxCount <= status.limits.min}
                   onChange={e => setCount(Number(e.target.value))} style={{ flex: '1 1 160px', accentColor: '#0a0a0a' }} data-testid="count" />
-                <button style={btnGhost} aria-label="more reels" disabled={busy || count >= status.limits.max} onClick={() => setCount(c => Math.min(status.limits.max, c + 1))}>+</button>
+                <button style={btnGhost} aria-label="more reels" disabled={busy || count >= maxCount} onClick={() => setCount(c => Math.min(maxCount, c + 1))}>+</button>
+                <input type="number" aria-label="type a number of reels" min={status.limits.min} max={maxCount} value={count} disabled={busy} data-testid="count-input"
+                  onChange={e => { const n = parseInt(e.target.value, 10); if (!Number.isNaN(n)) setCount(Math.max(status.limits.min, Math.min(maxCount, n))) }}
+                  style={{ width: 64, padding: '6px 8px', border: '1px solid #d4d4d4', borderRadius: 8, fontSize: 16, textAlign: 'center' }} />
                 <b style={{ fontSize: 20, minWidth: 28, textAlign: 'center' }} data-testid="count-value">{count}</b>
               </div>
+              {avail?.available != null && <p style={small} data-testid="available">You have {avail.complete ? avail.available : `${avail.available} or more`} reel{avail.available === 1 && avail.complete ? '' : 's'} available{!avail.complete ? ` (the most you can import at once is ${status.limits.max})` : ''}.</p>}
               {fixture && count > 12 && <p style={small}>The test fixture only has 12 reels.</p>}
               <button style={{ ...btn, opacity: busy ? 0.5 : 1 }} disabled={busy} onClick={startImport} data-testid="import">
                 {busy ? 'Importing…' : status.account?.lastImportAt ? 'Re-import' : 'Import'}
@@ -248,7 +263,13 @@ export default function CreatorDna() {
               {job && job.status === 'error' && <p style={{ ...p, fontWeight: 700 }} role="alert">{job.error}</p>}
             </div>
 
-            {dna?.dna && (
+            {dna?.dna && dna.dna.data.mode === 'breakdown' && (
+              <div style={card} data-testid="breakdown-note">
+                <h2 style={h2}>Your reels, one by one</h2>
+                <p style={p}>Patterns need at least 3 reels. With {dna.dna.sampleSize} reel{dna.dna.sampleSize === 1 ? '' : 's'} you get the breakdown of each reel below, and no pattern claims. Import more reels to see what they share.</p>
+              </div>
+            )}
+            {dna?.dna && dna.dna.data.mode !== 'breakdown' && (
               <div style={card} data-testid="dna">
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                   <h2 style={h2}>Your Creator DNA</h2>

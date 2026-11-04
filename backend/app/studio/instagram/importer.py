@@ -22,7 +22,7 @@ from app.studio.instagram.graph import RateLimited, TokenInvalid
 from app.studio.instagram.models import CreatorDna, IgAccount, IgReel, IgReelInsight
 
 log = logging.getLogger(__name__)
-MIN_COUNT, MAX_COUNT, DEFAULT_COUNT = 5, 30, 10
+MIN_COUNT, MAX_COUNT, DEFAULT_COUNT = 1, 30, 10
 JOB_KEY, JOB_TTL = "ig:import:{}", 3600
 LOCK_KEY, LOCK_TTL = "ig:import_lock:{}", 1800
 CONCURRENCY = 3

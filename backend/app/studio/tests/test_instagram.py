@@ -282,7 +282,7 @@ async def test_dna_with_too_few_reels_makes_no_model_call_and_claims_no_pattern(
     monkeypatch.setattr(D, "_ask", ask)
     out = await D.build_dna([reel(n, 1.0, 0.5, fp()) for n in range(1, 4)], "reach", [], D.Spend(1))
     assert ask.calls == 0
-    assert out["dna"]["mode"] == "descriptive" and "too few" in out["summary"].lower()
+    assert out["dna"]["mode"] == "descriptive" and "early observations" in out["summary"].lower()
     assert "not proof" in out["summary"] and "3 most recent" in out["summary"]
     assert out["dna"]["keep"] == [] and out["dna"]["change"] == []
 
@@ -595,8 +595,8 @@ async def test_only_one_import_runs_per_user():
     assert first and second is None and "already running" in why
 
 
-def test_count_is_clamped_to_5_30():
-    assert importer.clamp_count(1) == 5 and importer.clamp_count(99) == 30 and importer.clamp_count("x") == 10 and importer.clamp_count(12) == 12
+def test_count_is_clamped_to_1_30():
+    assert importer.clamp_count(1) == 1 and importer.clamp_count(0) == 1 and importer.clamp_count(99) == 30 and importer.clamp_count("x") == 10 and importer.clamp_count(12) == 12
 
 
 @aio

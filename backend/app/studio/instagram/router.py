@@ -69,6 +69,38 @@ async def status(request: Request, user: User = Depends(get_current_user), db: A
     }
 
 
+AVAILABLE_KEY, AVAILABLE_TTL = "ig:available:{}", 600
+
+
+@router.get("/available")
+async def available(request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """How many reels the connected account has (counted up to the import maximum, cached 10 minutes: one Instagram call at most).
+    available=None when it could not be counted; the page then offers the plain maximum."""
+    import json
+    acct, source = await _source_for(db, user, request)
+    key = AVAILABLE_KEY.format(user.id)
+    try:
+        cached = await redis_client.get(key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+    out = {"available": None, "complete": False, "max": importer.MAX_COUNT}
+    try:
+        n, complete = await source.count_reels(importer.MAX_COUNT)
+        out.update(available=n, complete=complete)
+        try:
+            await redis_client.setex(key, AVAILABLE_TTL, json.dumps(out))
+        except Exception:
+            pass
+    except Exception as e:   # rate limit, bad token, network: the page falls back to the plain maximum
+        log.info("[Instagram] reel count failed: %s", type(e).__name__)
+        out["error"] = type(e).__name__
+    finally:
+        await source.aclose()
+    return out
+
+
 @router.post("/connect")
 async def connect(request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """The address to send the browser to. Instagram's consent page normally; in fixture mode (dev, localhost only) the account is

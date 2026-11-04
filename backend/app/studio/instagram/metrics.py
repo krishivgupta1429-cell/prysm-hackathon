@@ -13,6 +13,7 @@ METRIC_LABEL = {
     "total_interactions": "total interactions", "ig_reels_avg_watch_time": "average watch time",
     "ig_reels_video_view_total_time": "total watch time", "reels_skip_rate": "skip rate",
 }
+MIN_FOR_DNA = 3                # below this: only the per-reel breakdown, no pattern claim of any kind
 MIN_FOR_PATTERNS = 5          # below this the DNA says "too few reels to call anything a pattern"
 MIN_FOR_SPLIT = 4             # top/bottom split needs at least this many scored reels
 
