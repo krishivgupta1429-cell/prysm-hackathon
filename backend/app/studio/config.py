@@ -18,7 +18,8 @@ REPO_DIR = BACKEND_DIR.parent
 ENV_PATH = BACKEND_DIR / ".env"
 
 # Meta API
-META_BASE_URL = "https://api.meta.ai/v1"
+DEFAULT_META_BASE_URL = "https://api.meta.ai/v1"
+# META_BASE_URL (set after get_env is defined, below) can point at a relay (scripts/meta_relay.py, docs/meta-relay.md)
 SPARK_MODELS = ("muse-spark-1.1", "muse-spark-1.2", "muse-spark-1.3")  # plain ids, never -contributor
 SPARK_USD_PER_M_IN = 1.25
 SPARK_USD_PER_M_OUT = 4.25
@@ -116,6 +117,20 @@ def get_env(name: str) -> str | None:
     return value or None
 
 
+# Where the Meta API is reached. Default https://api.meta.ai/v1; the env var META_BASE_URL overrides it (e.g. a relay: <tunnel url>/v1).
+META_BASE_URL = (get_env("META_BASE_URL") or DEFAULT_META_BASE_URL).rstrip("/")
+
+
+def via_relay() -> bool:
+    """True when META_BASE_URL points somewhere other than Meta itself (a relay that holds the key and checks X-Relay-Secret)."""
+    return META_BASE_URL != DEFAULT_META_BASE_URL
+
+
+def relay_secret() -> str | None:
+    """RELAY_SECRET, only when going through a relay: it is never sent to Meta itself."""
+    return get_env("RELAY_SECRET") if via_relay() else None
+
+
 def meta_key() -> str | None:
     return get_env("META_API_KEY")
 
@@ -157,7 +172,7 @@ def work_dir() -> Path:
 
 def redact(text: str) -> str:
     """Remove any configured API key value from text before it is logged or stored."""
-    for key in (meta_key(), groq_key(), gemini_key(), *acr_credentials()[1:]):
+    for key in (meta_key(), groq_key(), gemini_key(), get_env("RELAY_SECRET"), *acr_credentials()[1:]):
         if key:
             text = text.replace(key, "***")
     return text

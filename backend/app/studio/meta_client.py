@@ -149,7 +149,7 @@ class MetaClient:
     # ------------------------------------------------------------ plumbing
 
     def _redact(self, text: str) -> str:
-        for key in (self.meta_key, self.groq_key, self.gemini_key):
+        for key in (self.meta_key, self.groq_key, self.gemini_key, config.get_env("RELAY_SECRET")):
             if key:
                 text = text.replace(key, "***")
         return config.redact(text)
@@ -165,6 +165,16 @@ class MetaClient:
                                          int(reasoning_tokens or 0), float(units or 0.0)))
 
     def _headers(self, extra: dict | None = None) -> dict:
+        if config.via_relay():
+            # Through a relay (META_BASE_URL overridden, see docs/meta-relay.md): the relay proves itself with X-Relay-Secret and holds the Meta key,
+            # so no key is needed here (one set anyway is still sent and wins). The secret is never sent to Meta itself.
+            out = dict(extra or {})
+            secret = config.relay_secret()
+            if secret:
+                out["X-Relay-Secret"] = secret
+            if self.meta_key:
+                out["Authorization"] = f"Bearer {self.meta_key}"
+            return out
         if not self.meta_key:
             raise MissingKey("META_API_KEY is not set in backend/.env")
         return {"Authorization": f"Bearer {self.meta_key}", **(extra or {})}

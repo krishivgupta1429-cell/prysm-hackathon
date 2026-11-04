@@ -72,7 +72,11 @@ def problems(s, getenv: Callable[[str], str | None]) -> tuple[list[str], list[st
 
     # Models and signals
     if (s.AI_PROVIDER or "").lower() == "meta":
-        if not set_("META_API_KEY"):
+        from app.studio import config as _studio_config
+        if _studio_config.via_relay():   # a relay holds the Meta key (docs/meta-relay.md); the relay secret is what this server needs
+            if not set_("RELAY_SECRET"):
+                err.append("RELAY_SECRET: required because META_BASE_URL points at a relay")
+        elif not set_("META_API_KEY"):
             err.append("META_API_KEY: required because AI_PROVIDER=meta")
     elif not s.ANTHROPIC_API_KEY:
         err.append("ANTHROPIC_API_KEY: required when AI_PROVIDER is not meta")
