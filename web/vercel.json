@@ -1,6 +1,7 @@
 {
   "rewrites": [
     { "source": "/auth/:path*", "destination": "https://YOUR-BACKEND-URL.example.com/auth/:path*" },
+    { "source": "/instagram/:path*", "destination": "https://YOUR-BACKEND-URL.example.com/instagram/:path*" },
     { "source": "/prysm/:path*", "destination": "https://YOUR-BACKEND-URL.example.com/prysm/:path*" },
     { "source": "/billing/:path*", "destination": "https://YOUR-BACKEND-URL.example.com/billing/:path*" },
     { "source": "/media/:path*", "destination": "https://YOUR-BACKEND-URL.example.com/media/:path*" },

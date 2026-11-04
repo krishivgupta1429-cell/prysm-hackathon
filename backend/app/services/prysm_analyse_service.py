@@ -2236,8 +2236,11 @@ async def run_full_analysis(
     source_type: str = "upload",
     credit_checker: Optional[Callable[[float], Awaitable[bool]]] = None,
     progress_cb: Optional[Callable[[str, str], None]] = None,
+    creator_dna_addendum: str = "",
 ) -> Dict[str, Any]:
     """Run the complete Prysm analysis pipeline.
+
+    creator_dna_addendum: optional text appended to both scoring prompts after the style addendum (hackathon Creator DNA; "" changes nothing).
 
     progress_cb: optional (stage, status) callback so the website can show the real stage of the job (hackathon shell;
         None changes nothing).
@@ -2676,14 +2679,14 @@ async def run_full_analysis(
             saved_frames=saved_frames, post_metadata=post_metadata, audio_path=audio_path,
             has_vision=has_vision, has_audio=has_audio,
             extra_signals=_extra_signals,
-            style_addendum=_coach_style.addendum(),
+            style_addendum=_coach_style.addendum() + creator_dna_addendum,
         )
         is_competitor = intent == "competitor"
         if settings.DEBUG_SAVE_INPUTS:  # hackathon: exact scoring inputs, saved once, for scripts/rescore.py
             try:
                 from app.studio.rescore import save_inputs
                 save_inputs(dict(
-                    call_a_prompt=_call_a_prompt, call_b_prompt=_call_b_prompt, style_addendum=_coach_style.addendum(),
+                    call_a_prompt=_call_a_prompt, call_b_prompt=_call_b_prompt, style_addendum=_coach_style.addendum() + creator_dna_addendum,
                     max_tokens_a=9000 if is_competitor else 7000, max_tokens_b=6000, intent=intent, niche=niche,
                     platform=platform, source_type=source_type, scored_weights=scored_weights,
                     whisper_data={k: whisper_data.get(k) for k in ("transcript", "segments", "verbalCTA", "language")},

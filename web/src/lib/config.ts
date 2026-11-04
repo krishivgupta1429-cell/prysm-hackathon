@@ -23,3 +23,7 @@ export const SOCIAL_LINKS = {
  *  email equals VITE_FOUNDER_EMAIL. The backend still decides: it answers 404 for anyone who may not see the numbers. */
 export const SHOW_COST_PANEL: boolean = env.VITE_SHOW_COST_PANEL === '1'
 export const FOUNDER_EMAIL: string = ((env.VITE_FOUNDER_EMAIL as string | undefined) || '').trim().toLowerCase()
+
+/** VITE_SHOW_QWEN_CARD=1 (testing only) brings back the zero-shot Qwen hook/watch bars in "Predicted Viewer Behaviour". Off by default: the
+ *  zero-shot guess is near-constant (about 70% for every video). When on, the card still says "Rough estimate from frame content, not measured watch data". */
+export const SHOW_QWEN_CARD: boolean = env.VITE_SHOW_QWEN_CARD === '1'

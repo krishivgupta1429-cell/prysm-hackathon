@@ -274,36 +274,25 @@ export default function Settings() {
               </div>
             </div>
 
-            {/* Instagram — localhost only */}
-            {window.location.hostname === 'localhost' && !STUDIO_MODE && (
-              <div>
-                <p className="text-[10px] font-bold tracking-widest uppercase text-foreground/25 mb-3 font-body">Integrations</p>
-                <div className="border border-border rounded-xl p-5 bg-background">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-display font-semibold">Connect Instagram</p>
-                      <p className="text-[12px] text-foreground/35 font-body mt-0.5">
-                        {igStatus === 'connected' ? 'Your Instagram account is connected.' : 'Unlock personalised insights.'}
-                      </p>
-                      {igStatus === 'error' && <p className="text-[12px] text-red-500/70 font-body mt-1">Connection failed. Please try again.</p>}
-                    </div>
-                    {igStatus === 'connected' ? (
-                      <div className="flex items-center gap-1.5 text-[12px] text-green-600 font-body font-semibold">
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                        </svg>
-                        Connected
-                      </div>
-                    ) : (
-                      <a href={apiUrl(`/auth/instagram?token=${getToken()}`)}
-                        className="px-4 py-2 rounded-xl bg-foreground text-background text-[12px] font-body font-bold hover:opacity-85 transition-opacity">
-                        Connect →
-                      </a>
-                    )}
+            {/* Instagram connect + Creator DNA (hackathon): the flow lives on /creator-dna */}
+            <div>
+              <p className="text-[10px] font-bold tracking-widest uppercase text-foreground/25 mb-3 font-body">Integrations</p>
+              <div className="border border-border rounded-xl p-5 bg-background">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-display font-semibold">Instagram and Creator DNA</p>
+                    <p className="text-[12px] text-foreground/35 font-body mt-0.5">
+                      {igStatus === 'connected' ? 'Your Instagram account is connected.' : 'Connect your own account to personalise every analysis with your real reels.'}
+                    </p>
+                    {igStatus === 'error' && <p className="text-[12px] text-red-500/70 font-body mt-1">Connection failed. Please try again.</p>}
                   </div>
+                  <a href="/creator-dna"
+                    className="px-4 py-2 rounded-xl bg-foreground text-background text-[12px] font-body font-bold hover:opacity-85 transition-opacity whitespace-nowrap">
+                    {igStatus === 'connected' ? 'Open →' : 'Connect →'}
+                  </a>
                 </div>
               </div>
-            )}
+            </div>
 
             <div className="pt-1">
               <button onClick={handleSignOut}

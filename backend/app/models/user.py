@@ -10,6 +10,7 @@ from sqlalchemy import (
     Column, String, Boolean, Integer, DateTime,
     ForeignKey, Enum, Text, Float, JSON, BigInteger
 )
+from app.studio.instagram.tokencrypt import EncryptedToken  # hackathon: encrypted Instagram token column
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -57,7 +58,7 @@ class User(Base):
     auth_provider = Column(String(20), default="email", nullable=False)  # "email" or "google"
 
     # Instagram OAuth
-    instagram_access_token = Column(Text, nullable=True)
+    instagram_access_token = Column(EncryptedToken, nullable=True)  # hackathon: Fernet-encrypted at rest (TOKEN_ENCRYPTION_KEY)
     instagram_user_id      = Column(String(50), nullable=True)
     instagram_username     = Column(String(100), nullable=True)
 

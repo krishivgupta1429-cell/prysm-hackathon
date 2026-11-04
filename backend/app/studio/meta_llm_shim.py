@@ -226,13 +226,13 @@ def build_messages(system, messages: list) -> list:
 
 
 def build_body(model: str, max_tokens: int | None, messages: list, system, temperature=None, headroom: int | None = None,
-               stream: bool = False, group: str | None = None) -> dict:
+               stream: bool = False, group: str | None = None, effort_override: str | None = None) -> dict:
     group = group or call_group(messages, stream)
     body = {"model": model, "messages": build_messages(system, messages)}
     if max_tokens:
         body["max_tokens"] = int(max_tokens) + (reasoning_headroom(group) if headroom is None else headroom)
     # ARIA streams to a person waiting for the first word: it defaults to low reasoning effort
-    effort = reasoning_effort(group)
+    effort = effort_override or reasoning_effort(group)
     if effort:
         body["reasoning_effort"] = effort
     if temperature is not None:
@@ -263,15 +263,18 @@ class _Messages:
         self._owner = owner
 
     async def create(self, *, model: str, max_tokens: int = 1024, messages: list, system=None, temperature=None,
-                     **_ignored) -> Message:
+                     reasoning_effort: str | None = None, headroom: int | None = None, **_ignored) -> Message:
+        """reasoning_effort / headroom (hackathon, optional): per-call overrides for small side calls (Creator DNA) that
+        should not use the per-group env settings of the analysis. Not passed = unchanged behaviour."""
         owner = self._owner
         group = call_group(messages)
         target = meta_model_for(model, group)
-        headroom = reasoning_headroom(group)
+        headroom = reasoning_headroom(group) if headroom is None else headroom
         spent = Usage()
         spent_cost, spent_reasoning = 0.0, 0
         for attempt in range(1, MAX_ATTEMPTS + 1):
-            body = build_body(target, max_tokens, messages, system, temperature, headroom, group=group)
+            body = build_body(target, max_tokens, messages, system, temperature, headroom, group=group,
+                              effort_override=reasoning_effort)
             try:
                 reply = await asyncio.to_thread(owner._post, body)
             except MissingKey as e:

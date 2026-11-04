@@ -9,6 +9,12 @@
   force = true
 
 [[redirects]]
+  from = "/instagram/*"
+  to = "https://YOUR-BACKEND-URL.example.com/instagram/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/prysm/*"
   to = "https://YOUR-BACKEND-URL.example.com/prysm/:splat"
   status = 200

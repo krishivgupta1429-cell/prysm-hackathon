@@ -14,6 +14,7 @@ import { STUDIO_MODE } from '@/lib/config'
 import CostPanel from '@/studio/CostPanel'
 import { parseMarkedSteps } from '@/studio/steps'
 import ViewerBehaviourCard from '@/studio/ViewerBehaviourCard'
+import { CreatorDnaCard, PersonalisedTag, type CreatorDnaBlock } from '@/studio/CreatorDnaCard'
 
 interface Parameter {
   name: string
@@ -113,6 +114,7 @@ interface Result {
   edited_video_key?: string
   edit_plan?: { applied_params: string[]; skipped_params: string[] }
   modelsUsed?: { step: string; model: string; status: string; note?: string }[]
+  creatorDna?: CreatorDnaBlock
 }
 
 /* ── Helpers ───────────────────────────────────────────────────────────────── */
@@ -845,6 +847,7 @@ export default function Results({ injected }: { injected?: Record<string, unknow
                       </div>
                     </div>
                   </div>
+                  {result.creatorDna?.personalised && <div className="mb-1.5"><PersonalisedTag fixture={result.creatorDna.isFixture} /></div>}
                   {result.biggestProblem && (
                     <p className="text-[13px] sm:text-[14px] text-foreground/55 font-body leading-relaxed mb-1.5">{result.biggestProblem}</p>
                   )}
@@ -1002,9 +1005,12 @@ export default function Results({ injected }: { injected?: Record<string, unknow
             )}
 
             {/* ═══ Hackathon: Modal-served prediction (evqa / qwen_zero_shot) + Q-Align visual quality signal ═══ */}
-            {result.engagementPrediction && canSeePrediction && (result.engagementPrediction.source === 'evqa' || result.engagementPrediction.source === 'qwen_zero_shot') && (
+            {canSeePrediction && (!result.engagementPrediction || !result.engagementPrediction.source || result.engagementPrediction.source === 'evqa' || result.engagementPrediction.source === 'qwen_zero_shot') && (
               <ViewerBehaviourCard ep={result.engagementPrediction} />
             )}
+
+            {/* ═══ Hackathon: how this video compares with the creator's own imported reels ═══ */}
+            {result.creatorDna?.personalised && <CreatorDnaCard block={result.creatorDna} />}
 
             {/* ═══ ENGAGEMENT PREDICTION (RunPod AI) — Creator+ ═══ */}
             {result.engagementPrediction && result.engagementPrediction.source === 'runpod' && result.engagementPrediction.ecr != null && result.engagementPrediction.nawp != null && (
