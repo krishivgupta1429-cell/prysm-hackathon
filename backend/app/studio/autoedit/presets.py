@@ -27,9 +27,13 @@ LIMITS = {"caption_size": (52, 120), "hook_size": (60, 140), "zoom_scale": (1.0,
 
 
 def resolve_style(preset: str | None, overrides: dict | None = None) -> dict:
+    from app.studio.autoedit import packs
     name = preset if preset in PRESETS else DEFAULT_PRESET
-    style = {"preset": name, **PRESETS[name]}
-    for k, v in (overrides or {}).items():
+    style = {"preset": name, **PRESETS[name], "intensity": "balanced", "sfx": True, "emphasis": [], "max_fonts": 2}
+    ov = overrides or {}
+    if ov.get("pack") in packs.PACKS:     # a pack first, then the creator's own picks (fonts, accent, animation) on top of it
+        style.update(packs.pack_style(ov["pack"]))
+    for k, v in ov.items():
         if k in LIMITS and isinstance(v, (int, float)) and not isinstance(v, bool):
             lo, hi = LIMITS[k]
             style[k] = type(PRESETS[name][k])(min(max(v, lo), hi))
@@ -42,5 +46,21 @@ def resolve_style(preset: str | None, overrides: dict | None = None) -> dict:
         elif k == "transition" and v in ("cut", "dissolve"):
             style[k] = v
         elif k == "caption_font_weight" and v in ("regular", "bold", "extrabold"):
+            style[k] = v
+        elif k in ("font_headline", "font_caption") and isinstance(v, str) and 1 <= len(v) <= 60:
+            style[k] = v
+        elif k == "animation" and v in packs.ANIMATIONS:
+            style[k] = v
+        elif k == "intensity" and v in packs.INTENSITIES:
+            style[k] = v
+        elif k == "sfx" and isinstance(v, bool):
+            style[k] = v
+        elif k == "emphasis" and isinstance(v, list):
+            style[k] = [round(float(x), 2) for x in v if isinstance(x, (int, float)) and not isinstance(x, bool)][:80]
+        elif k == "max_fonts" and v in (1, 2, 3):
+            style[k] = v
+        elif k == "fonts" and isinstance(v, dict):      # the resolved font files (set by the run, never by the user)
+            style[k] = v
+        elif k == "caption_weight" and isinstance(v, int) and 300 <= v <= 900:
             style[k] = v
     return style

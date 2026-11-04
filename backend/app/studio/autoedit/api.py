@@ -27,6 +27,7 @@ from app.models.prysm_analysis import PrysmAnalysis
 from app.models.user import User
 from app.studio.autoedit import config, ffx, orchestrator as O, revise
 from app.studio.autoedit.edl import EDL, GROUPS, RISK
+from app.studio.autoedit import sfxlib as _sfx
 from app.studio.autoedit.llm import CostCapExceeded, CostMeter, EditLLM
 from app.studio.autoedit.presets import PRESETS
 from app.studio.autoedit.storage import edit_prefix, get_storage, upload_key
@@ -101,6 +102,7 @@ OP_LABELS = {
     "caption_burn": lambda p: "Burned-in captions with word-by-word highlight",
     "zoom_punch": lambda p: f"Zoom punch at {p['at']:.1f} s (×{p['scale']:.2f})",
     "loudnorm": lambda p: f"Loudness to {p['target_lufs']:g} LUFS + light denoise",
+    "sfx_hit": lambda p: f"Sound accent ({p['effect']}, {p['kind']} moment) at {p['at']:.1f} s",
     "music_duck": lambda p: f"Music lowered {abs(p['duck_db']):g} dB under the voice",
 }
 
@@ -121,11 +123,19 @@ def public_state(st: dict) -> dict:
         op_rev = (out.get("op_reverts") or {}).get(o["id"])
         changes.append({"id": o["id"], "type": o["type"], "group": o["group"], "label": label, "reason": o.get("reason", ""),
                         "target_parameter": o.get("target_parameter", ""), "source_step_id": o.get("source_step_id"), "enabled": o["enabled"],
-                        "verdict": "reverted" if op_rev else verdict, "verdict_reasons": [op_rev] if op_rev else g.get("reasons", []), "user_override": o["id"] in overrides,
+                        "verdict": "reverted" if op_rev else verdict, "verdict_reasons": [op_rev] if op_rev else g.get("reasons", []), "user_override": o["id"] in overrides, "finding": o.get("finding", ""),
+                        "effect_options": (_sfx.MOMENT_EFFECTS.get(o["params"].get("kind"), []) if o["type"] == "sfx_hit" else []),
                         "risk": g.get("risk") or RISK.get(o["group"], "risky")})
     out["changes"] = changes
     out["running"] = out.get("status") in ("queued", "running")
     out["presets"] = list(PRESETS)
+    from app.studio.autoedit import packs as _packs
+    out["packs"] = {k: {"label": v["label"], "headline": v["headline"], "caption": v["caption"], "accent": v["accent"], "animation": v["animation"], "for": v["for"]}
+                    for k, v in _packs.PACKS.items()}
+    out["intensities"] = list(_packs.INTENSITIES)
+    ov = out.get("style_overrides") or {}
+    out["style"] = {"pack": ov.get("pack"), "font_headline": ov.get("font_headline"), "font_caption": ov.get("font_caption"), "animation": ov.get("animation"),
+                    "intensity": ov.get("intensity", "balanced"), "sfx": ov.get("sfx", True)}
     out["revisions_left"] = max(0, config.MAX_REVISIONS - len(out.get("revisions") or []))
     out["trace"] = (out.get("trace") or [])[-80:]
     return out
@@ -218,6 +228,23 @@ class ToggleBody(BaseModel):
     enabled: bool
 
 
+class StyleBody(BaseModel):
+    pack: str | None = None
+    font_headline: str | None = None
+    font_caption: str | None = None
+    animation: str | None = None
+    intensity: str | None = None
+    sfx: bool | None = None
+
+
+KEEP_ON_PRESET = ("pack", "font_headline", "font_caption", "animation", "intensity", "sfx", "emphasis", "caption_weight", "accent")
+
+
+class SwapBody(BaseModel):
+    op_id: str
+    effect: str
+
+
 class PresetBody(BaseModel):
     preset: str
 
@@ -308,8 +335,76 @@ async def set_preset(analysis_id: str, body: PresetBody, current_user: User = De
     uid = _uid(current_user.id)
     if not await _acquire_user(uid):
         raise HTTPException(status_code=409, detail="You already have an edit running.")
-    st["preset"], st["style_overrides"], st["status"] = body.preset, {}, "running"
+    keep = {k: v for k, v in (st.get("style_overrides") or {}).items() if k in KEEP_ON_PRESET}   # the pack, fonts and switches survive a preset change
+    st["preset"], st["style_overrides"], st["status"] = body.preset, keep, "running"
     _spawn(_job("rerender", st, dict(rec.raw_result or {}), uid, summary=f"style preset {body.preset}"))
+    return public_state(st)
+
+
+@router.post("/{analysis_id}/swap")
+async def swap_effect(analysis_id: str, body: SwapBody, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Swap the sound effect of one sound accent for another effect that suits its moment."""
+    from app.studio.autoedit import sfxlib
+    rec, st = await _owned_state(analysis_id, current_user, db)
+    _need_idle(st)
+    op = next((o for o in (st.get("edl") or {}).get("ops", []) if o["id"] == body.op_id and o["type"] == "sfx_hit"), None)
+    if not op:
+        raise HTTPException(status_code=404, detail="Unknown sound accent.")
+    if body.effect not in sfxlib.MOMENT_EFFECTS.get(op["params"]["kind"], []):
+        raise HTTPException(status_code=400, detail="That effect does not suit this moment.")
+    uid = _uid(current_user.id)
+    if not await _acquire_user(uid):
+        raise HTTPException(status_code=409, detail="You already have an edit running.")
+    op["params"]["effect"] = body.effect
+    st["status"] = "running"
+    _spawn(_job("rerender", st, dict(rec.raw_result or {}), uid, summary=f"sound {body.op_id}: {body.effect}"))
+    return public_state(st)
+
+
+@router.get("/fonts")
+async def search_fonts(q: str = "", category: str | None = None, script: str | None = None, current_user: User = Depends(get_current_user)):
+    """The Google Fonts picker: search by name, filter by category (display, sans, serif, rounded, handwriting, mono, devanagari)."""
+    from app.studio.autoedit import fonts
+    if category and category not in fonts.CATEGORIES:
+        raise HTTPException(status_code=400, detail="Unknown category.")
+    return {"categories": list(fonts.CATEGORIES), "fonts": fonts.search(q[:60], category, script, limit=60)}
+
+
+@router.post("/{analysis_id}/style")
+async def set_style(analysis_id: str, body: StyleBody, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Change the style pack, either font, the caption animation, the effect intensity or the sound-effects switch with one call."""
+    from app.studio.autoedit import fonts, packs
+    rec, st = await _owned_state(analysis_id, current_user, db)
+    _need_idle(st)
+    fams = fonts.families()
+    ov = dict(st.get("style_overrides") or {})
+    if body.pack is not None:
+        if body.pack not in packs.PACKS:
+            raise HTTPException(status_code=400, detail="Unknown style pack.")
+        p = packs.pack_style(body.pack)
+        ov.update({"pack": body.pack, "font_headline": p["font_headline"], "font_caption": p["font_caption"], "animation": p["animation"],
+                   "caption_weight": p["caption_weight"], "accent": p["accent"]})
+    for key in ("font_headline", "font_caption"):
+        v = getattr(body, key)
+        if v is not None:
+            if v not in fams:
+                raise HTTPException(status_code=400, detail=f"{v!r} is not a Google Fonts family.")
+            ov[key] = v
+    if body.animation is not None:
+        if body.animation not in packs.ANIMATIONS:
+            raise HTTPException(status_code=400, detail="Unknown caption animation.")
+        ov["animation"] = body.animation
+    if body.intensity is not None:
+        if body.intensity not in packs.INTENSITIES:
+            raise HTTPException(status_code=400, detail="Intensity must be subtle, balanced or punchy.")
+        ov["intensity"] = body.intensity
+    if body.sfx is not None:
+        ov["sfx"] = body.sfx
+    uid = _uid(current_user.id)
+    if not await _acquire_user(uid):
+        raise HTTPException(status_code=409, detail="You already have an edit running.")
+    st["style_overrides"], st["status"] = ov, "running"
+    _spawn(_job("rerender", st, dict(rec.raw_result or {}), uid, summary="style: " + ", ".join(f"{k} {v}" for k, v in body.model_dump(exclude_none=True).items())))
     return public_state(st)
 
 

@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.studio.autoedit import config, captions, ffx, verify, planner, defaults, faces as facesmod, ducking
+from app.studio.autoedit import config, captions, ffx, verify, planner, defaults, creative, fonts as fonts_mod, packs, faces as facesmod, ducking
 from app.studio.autoedit import cover as cover_mod, executor, inputs as inputs_mod
 from app.studio.autoedit.edl import EDL, GROUPS, RISK, DEFAULT_TARGET, Op, validate_edl, ops_by_group
 from app.studio.autoedit.llm import CostMeter, CostCapExceeded, EditLLM
@@ -32,7 +32,7 @@ from app.studio.autoedit.timeline import surviving_words
 log = logging.getLogger(__name__)
 
 GROUP_LABEL = {"hook": "Hook", "pacing": "Dead air and fillers", "captions": "Captions", "audio": "Loudness and noise", "text": "Labels and CTA text",
-               "zoom": "Zoom punches", "rhythm": "Cuts that remove speech or follow the beat", "polish": "Music ducking and sound effects"}
+               "zoom": "Zoom punches", "rhythm": "Cuts that remove speech or follow the beat", "sound": "Sound accents", "polish": "Music ducking and sound effects"}
 
 
 def now() -> str:
@@ -69,6 +69,8 @@ class Runner:
         self.duck: Path | None = None
         self.stems: tuple[Path, Path] | None = None
         self._stems_future = None
+        self.fonts_spec: dict = {}
+        self.font_fetch = None   # injectable for tests
         self.t_start = time.time()
         self._lock = threading.RLock()
         self._duck_lock = threading.Lock()
@@ -160,7 +162,32 @@ class Runner:
             self.storage.put_bytes(fk, json.dumps(self.faces).encode(), "application/json")
 
     def style(self) -> dict:
-        return resolve_style(self.state["preset"], self.state["style_overrides"])
+        ov = dict(self.state["style_overrides"])
+        if self.fonts_spec:
+            ov["fonts"] = self.fonts_spec
+        return resolve_style(self.state["preset"], ov)
+
+    def _resolve_fonts(self, edl: EDL | None = None):
+        """Download (once) and check the chosen fonts against the real text; Poppins with a note where a font cannot draw it."""
+        st = self.state
+        style = resolve_style(st["preset"], st["style_overrides"])
+        if "font_caption" not in style:
+            self.fonts_spec = {}
+            return
+        words = " ".join(w["word"] for w in self.inp.words)
+        head_text = " ".join(o.params.get("text", "") for o in (edl.ops if edl else []) if o.type == "text_overlay") or "Wait for it"
+        cache = fonts_mod.FontCache(fetch=self.font_fetch) if self.font_fetch else fonts_mod.FontCache()
+        notes = []
+        spec = {}
+        for role, fam, text, w in (("caption", style["font_caption"], words or "Hello", style.get("caption_weight", 700)),
+                                   ("headline", style["font_headline"], head_text, 700)):
+            r = fonts_mod.resolve(cache, fam, w, text)
+            spec[role] = r.spec()
+            notes += r.notes
+        self.fonts_spec = spec
+        st["style_notes"] = list(dict.fromkeys(notes))
+        for n in st["style_notes"]:
+            self.event("info", n)
 
     def edl(self) -> EDL:
         e = EDL.model_validate(self.state["edl"])
@@ -241,11 +268,18 @@ class Runner:
                 f_plan = pool.submit(self._plan)
                 f_faces = pool.submit(self.load_faces)
                 f_base = pool.submit(self._baseline)
+                f_creative = pool.submit(self._creative)
                 if inp.has_music and inp.has_speech and not inp.music_driven:
                     self._stems_future = pool.submit(self._start_stems)
                 res = f_plan.result()
                 f_faces.result()
-                v, mnotes = planner.merge_auto(res.edl, auto.ops, inp)
+                cr = f_creative.result()
+                extra_ops, extra_tips = self._apply_creative(cr, auto)
+                v, mnotes = planner.merge_auto(res.edl, auto.ops + extra_ops, inp, self.state["style_overrides"])
+                for t in extra_tips:
+                    v.edl.manual_tips.append(planner.Tip(**t))
+                self._resolve_fonts(v.edl)
+                v.edl.style = self.style()
                 st["notes"] += res.notes + [n["text"] for n in mnotes]
                 edl = v.edl
                 st["edl"] = edl.model_dump()
@@ -280,6 +314,28 @@ class Runner:
             res = planner.plan(self.analysis, self.inp, self.llm, self.state["preset"])
             self.state["timing"]["plan_s"] = round(time.time() - t0, 1)
             return res
+
+    def _creative(self):
+        with self.stage("creative"):
+            return creative.decide(self.analysis, self.inp, self.llm, self.style().get("intensity", "balanced"))
+
+    def _apply_creative(self, cr, auto):
+        """Pack, fonts and emphasis from the director into the style overrides (never over a choice the creator already made), and its moments as ops."""
+        st = self.state
+        ov = st["style_overrides"]
+        p = packs.pack_style(cr.pack)
+        ov.setdefault("pack", cr.pack)
+        ov.setdefault("font_headline", cr.headline or p["font_headline"])
+        ov.setdefault("font_caption", cr.caption or p["font_caption"])
+        if "emphasis" not in ov:
+            ov["emphasis"] = cr.emphasis_times
+        st["style_choice"] = cr.to_json()
+        for n in cr.notes:
+            self.event("info", n)
+        self.event("decision", f"Style pack: {packs.PACKS[cr.pack]['label']}" + (f" ({cr.pack_reason})" if cr.pack_reason else "") +
+                   f"; fonts {ov['font_headline']} + {ov['font_caption']}; {len(cr.emphasis_times)} emphasis words", area="style")
+        cuts = [o.params["start"] for o in auto.ops if o.type == "cut_segment"]
+        return creative.moment_ops(cr, self.inp, cuts)
 
     def _baseline(self):
         """The 9:16 conversion without edits, as a proxy: the 'before' for the critic and the objective comparisons."""
@@ -359,7 +415,7 @@ class Runner:
         self.event("critic", f"critic ({critic.get('mode')}): " + (critic.get("notes") or critic.get("verdict", "")), mode=critic.get("mode"))
 
         # 3. keep or revert each bundle. A cut bundle the critic only faults at a few moments loses just those cuts.
-        partial = self._cull_faulty_cuts(edl, critic, allp, by_group)
+        partial = self._cull_faulty_ops(edl, critic, allp, by_group)
         kept: set[str] = set()
         for g in bundles:
             o = obj[g]
@@ -375,34 +431,45 @@ class Runner:
             if dec["keep"]:
                 kept.add(g)
                 if g in partial:
-                    gs["reasons"] = gs["reasons"] + [f"partly kept: {len(partial[g])} cut(s) were reverted on their own because the critic found a defect at them"]
+                    gs["reasons"] = gs["reasons"] + [f"partly kept: {len(partial[g])} change(s) were reverted on their own because the critic found a defect at them"]
             self.event("kept" if dec["keep"] else "reverted", f"{'kept' if dec['keep'] else 'reverted'} {GROUP_LABEL[g]} ({RISK[g]}): " + "; ".join(gs["reasons"]), group=g)
         self._conclude(edl, kept, base, (allp if kept == every and not partial else None), pool, prox=prox)
 
-    def _cull_faulty_cuts(self, edl: EDL, critic: dict, allp: dict, by_group: dict) -> dict[str, list[str]]:
-        """For a bundle of cuts (pacing, rhythm) whose major critic defects all carry a time in the edited video: find the cut whose join in
-        the edit is nearest to each defect (within 2 s), switch only those cuts off, and treat the remaining cuts as passing the critic.
-        The remaining cuts were in the video the critic watched, and it faulted nothing else, but they are not watched again as a set."""
+    def _op_times(self, g: str, ops: list[Op], rr) -> dict[str, list[float]]:
+        """Where each op of a bundle shows up in the EDITED video (seconds): the join of a cut, the start of a zoom, a sound or an overlay."""
         from app.studio.autoedit.edl import removal_ranges
+        out: dict[str, list[float]] = {}
+        if g in ("pacing", "rhythm"):
+            for o in ops:
+                for lo, hi in removal_ranges([o], self.inp):
+                    t = rr.timeline.map_time(hi + 0.02)
+                    if t is not None:
+                        out.setdefault(o.id, []).append(t)
+        elif g == "zoom":
+            out = {z["id"]: [z["out_at"]] for z in rr.zooms}
+        elif g == "sound":
+            out = {h["id"]: [h["out_at"]] for h in rr.sfx_hits}
+        elif g in ("text", "hook"):
+            out = {x["id"]: [x["start"]] for x in rr.overlays}
+        return out
+
+    def _cull_faulty_ops(self, edl: EDL, critic: dict, allp: dict, by_group: dict) -> dict[str, list[str]]:
+        """For a bundle of several changes whose major critic defects ALL carry a time in the edited video: find the change nearest to each
+        defect (within 2 s), switch only those off, and treat the rest as passing the critic. A failed check reverts only that change.
+        The remaining changes were in the video the critic watched, and it faulted nothing else, but they are not watched again as a set."""
         done: dict[str, list[str]] = {}
         if critic.get("verdict") != "ok":
             return done
-        tl = allp["rr"].timeline
-        for g in ("pacing", "rhythm"):
+        for g in ("pacing", "rhythm", "zoom", "sound", "text"):
             entry = (critic.get("bundles") or {}).get(g)
-            ops = [o for o in by_group.get(g, []) if o.enabled and o.type in ("trim", "cut_segment", "remove_filler")]
+            ops = [o for o in by_group.get(g, []) if o.enabled and (o.type in ("trim", "cut_segment", "remove_filler") or g in ("zoom", "sound", "text"))]
             major = [d for d in (entry or {}).get("defects", []) if d["severity"] == "major"]
             if not entry or not major or len(ops) < 2 or any(d.get("at_s") is None for d in major):
                 continue
-            joins = {}
-            for o in ops:
-                for lo, hi in removal_ranges([o], self.inp):
-                    t = tl.map_time(hi + 0.02)
-                    if t is not None:
-                        joins.setdefault(o.id, []).append(t)
+            times = self._op_times(g, ops, allp["rr"])
             culprits: dict[str, dict] = {}
             for d in major:
-                best = min(((abs(t - d["at_s"]), oid) for oid, ts in joins.items() for t in ts), default=None)
+                best = min(((abs(t - d["at_s"]), oid) for oid, ts in times.items() for t in ts), default=None)
                 if best is None or best[0] > 2.0:
                     culprits = {}
                     break
@@ -413,13 +480,13 @@ class Runner:
                 if o.id in culprits:
                     o.enabled = False
                     d = culprits[o.id]
-                    self.state.setdefault("op_reverts", {})[o.id] = f"the critic found a defect at this cut: {d['flag']}: {d['detail']}"
+                    self.state.setdefault("op_reverts", {})[o.id] = f"the critic found a defect at this change: {d['flag']}: {d['detail']}"
             entry["defects"] = [d for d in entry["defects"] if d not in culprits.values()]
             if entry["verdict"] == "reject":
                 entry["verdict"] = "approve"
             done[g] = list(culprits)
             where = ", ".join("%.0f s" % d["at_s"] for d in culprits.values())
-            self.event("info", f"{GROUP_LABEL[g]}: reverted {len(culprits)} of {len(ops)} cuts individually (critic defects at {where})")
+            self.event("info", f"{GROUP_LABEL[g]}: reverted {len(culprits)} of {len(ops)} changes individually (critic defects at {where})")
         return done
 
     def _prune_unclean_cuts(self, edl: EDL) -> list[str]:
@@ -438,7 +505,7 @@ class Runner:
                 self.event("info", f"{o.id}: {why}")
         for _ in range(8):
             pc = executor.plan_pieces(edl, self.inp, {"pacing", "rhythm"}, self.faces)
-            wg = verify.cuts_on_word_gaps(SimpleNamespace(timeline=pc.timeline), self.inp.words, self.inp.silences)
+            wg = verify.cuts_on_word_gaps(SimpleNamespace(timeline=pc.timeline), self.inp.words, self.inp.silences, verify.exact_edges(edl))
             if wg["ok"]:
                 break
             bad = wg["mid_word_cuts"][0]
@@ -575,6 +642,7 @@ class Runner:
             self.phase("rendering", f"re-rendering: {summary}")
             self.load_inputs()
             self.load_faces()
+            self._resolve_fonts(EDL.model_validate(st["edl"]) if st.get("edl") else None)
             edl = self.edl()
             enabled = {g for g in GROUPS if any(o.enabled and o.group == g for o in edl.ops)}
             path, rr, key = self.render_set(edl, enabled, "re")

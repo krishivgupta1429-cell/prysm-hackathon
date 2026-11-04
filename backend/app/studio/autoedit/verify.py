@@ -23,8 +23,8 @@ from app.studio.autoedit.llm import EditLLM, CostCapExceeded
 SCORED = ["Hook & Opening", "Retention & Pacing", "Shareability", "Audio & Music", "Trend Alignment", "Visual Quality & Originality"]
 RESCORE_PARAMS = SCORED + ["On-Screen Text"]
 LABEL = "AI-estimated (not measured viewership)"
-FLAGS = ("text_over_face", "cut_mid_word", "caption_timing", "audio_pumping", "click_at_cut", "zoom_crops_face", "duplicates_creator_text",
-         "jarring_cut", "tone_mismatch", "other")
+FLAGS = ("text_over_face", "cut_mid_word", "caption_timing", "caption_readability", "audio_pumping", "click_at_cut", "zoom_crops_face",
+         "duplicates_creator_text", "jarring_cut", "sfx_masks_speech", "too_many_effects", "wrong_sound_for_moment", "tone_mismatch", "other")
 
 
 # ------------------------------------------------------------------ a) objective measurements
@@ -62,14 +62,14 @@ def measure(video: str | Path, light: bool = False) -> dict:
     return out
 
 
-def text_geometry(ass_path: str | Path | None, duration: float, work: Path) -> dict:
+def text_geometry(ass_path: str | Path | None, duration: float, work: Path, fontsdir: Path | None = None) -> dict:
     """Render the subtitles on black and measure where the text really is (union of bright-pixel boxes at 4 fps)."""
     if not ass_path:
         return {"has_text": False, "ok": True, "violations": 0}
     import numpy as np
     scale = 4
     w, h = config.OUT_W // scale, config.OUT_H // scale
-    fonts = str(config.FONTS_DIR).replace(":", "\\:")
+    fonts = str(fontsdir or config.FONTS_DIR).replace(":", "\\:")
     ass = str(ass_path).replace("\\", "/").replace(":", "\\:")
     cmd = [config.ffmpeg_bin(), "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i",
            f"color=c=black:s={config.OUT_W}x{config.OUT_H}:r=4:d={duration:.2f}", "-vf",
@@ -119,7 +119,16 @@ def caption_sync(caption_words: list[dict], asr_words: list[dict]) -> dict | Non
             "p90_abs_ms": int(round(sorted(abs(o) for o in offs)[int(len(offs) * 0.9) - 1] * 1000))}
 
 
-def cuts_on_word_gaps(rr: RenderResult, words: list[dict], silences: list[dict] | None = None) -> dict:
+def exact_edges(edl: EDL) -> list[float]:
+    """Source times of the edges of cuts that were measured from the signal (silence / hesitation ops): word timestamps do not apply to them."""
+    out = []
+    for o in edl.ops:
+        if o.enabled and o.params.get("silence"):
+            out += [o.params["start"], o.params["end"]]
+    return out
+
+
+def cuts_on_word_gaps(rr: RenderResult, words: list[dict], silences: list[dict] | None = None, exact: list[float] | None = None) -> dict:
     """Every keep-segment boundary in the source must lie in a gap between words (no cut through a word). A boundary inside (or within
     0.2 s of) a stretch the silence detector measured as silent is fine: the signal is the authority there, not the word timestamps."""
     bad = []
@@ -128,7 +137,7 @@ def cuts_on_word_gaps(rr: RenderResult, words: list[dict], silences: list[dict] 
         if s.kind == "beat":
             continue
         for t in (s.src_start, s.src_end):
-            if t <= 0.01 or any(a <= t <= b for a, b in quiet):
+            if t <= 0.01 or any(a <= t <= b for a, b in quiet) or any(abs(t - e) <= 0.08 for e in exact or []):
                 continue
             for w in words:
                 if w["start"] + 0.03 < t < w["end"] - 0.03:
@@ -191,7 +200,7 @@ def objective_checks(group: str, before: dict, after: dict, rr: RenderResult, ed
     if group in ("pacing", "rhythm"):
         removed = inp.duration - (rr.duration - sum(s.length for s in rr.timeline.segments if s.kind != "main"))
         add("at most 25 % removed", removed / inp.duration <= config.MAX_REMOVED_FRACTION + 1e-6, f"{removed:.1f} s of {inp.duration:.1f} s ({removed / inp.duration:.0%})")
-        wg = cuts_on_word_gaps(rr, inp.words, inp.silences)
+        wg = cuts_on_word_gaps(rr, inp.words, inp.silences, exact_edges(edl))
         add("every cut sits between words", wg["ok"], "none inside a word" if wg["ok"] else str(wg["mid_word_cuts"][:3]))
         if "silence_ratio" in before and "silence_ratio" in after:
             add("silence not increased", after["silence_ratio"] <= before["silence_ratio"] + 0.02, f"{before['silence_ratio']:.1%} -> {after['silence_ratio']:.1%}")
@@ -203,7 +212,8 @@ def objective_checks(group: str, before: dict, after: dict, rr: RenderResult, ed
         add("loudness near -14 LUFS", -15.5 <= after["lufs"] <= -12.5, f"{before.get('lufs')} -> {after['lufs']} LUFS")
         add("true peak at or below -1 dBTP", (after.get("true_peak_db") or -99) <= -0.9, f"{after.get('true_peak_db')} dBTP")
     if group in ("text", "hook", "captions"):
-        geo = text_geometry(rr.ass_path, rr.duration, work)
+        from app.studio.autoedit.executor import fontsdir_for
+        geo = text_geometry(rr.ass_path, rr.duration, work, fontsdir_for(rr.style or edl.style, Path(work)))
         extra["text_geometry"] = geo
         add("text inside Instagram's safe area", geo["ok"], "all text frames inside" if geo["ok"] else f"{geo['violations']} frames outside (box {geo.get('bbox_px')})")
         extra["text_seconds"] = geo.get("seconds_with_text", 0.0)
@@ -314,7 +324,9 @@ def _describe(o: dict) -> str:
     if t == "music_duck":
         return f"music ducked {p.get('duck_db')} dB under the voice"
     if t == "caption_burn":
-        return "burned-in word-highlight captions"
+        return "burned-in word-highlight captions (3-5 word chunks, pop-in, emphasis words in the accent colour)"
+    if t == "sfx_hit":
+        return f"sound effect '{p.get('effect')}' for a {p.get('kind')} moment at {p.get('at')} s (synthesised, mixed far under the voice)"
     return t
 
 
@@ -331,6 +343,7 @@ version. The edit applies these bundles of changes:
 
 Watch AND listen to both. For each bundle decide whether it made the video better or at least not worse, and list every real DEFECT
 it introduced that a viewer would notice: {', '.join(FLAGS)}.
+- Judge captions for READABILITY (size, contrast against the picture, line length, not too fast to read), text against the face and the Instagram UI zones, sound effects for MASKING the speech (an effect that makes a word hard to hear), for being TOO MANY (the edit feels busy), and for being the WRONG SOUND for the moment (a comic sound on a serious line).
 - Give each defect a severity: "major" (a viewer would notice and be annoyed: a cut inside a word, text on the face, captions out of sync,
   pumping or clicking audio, a zoom that crops the face, text that repeats what the creator already shows) or "minor" (barely noticeable).
 - Do not invent defects. If a bundle is fine, give an empty defects list. A subtle but harmless change is an "approve".

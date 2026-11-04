@@ -40,6 +40,7 @@ class Inputs:
     has_speech: bool = False
     analysis_times: list[dict] = field(default_factory=list)  # {"t", "step_id", "context"}
     fillers: list[dict] = field(default_factory=list)       # candidates: {"word", "start", "end"}
+    hesitations: list[dict] = field(default_factory=list)   # um/uh-like sounds the recogniser dropped: {"start", "end", "f0", "level_db"}
     asr_cost_usd: float = 0.0
     beats: list[float] = field(default_factory=list)         # beat times (s) of a music-driven reel
     bpm: float = 0.0
@@ -142,6 +143,17 @@ def energy_peaks(wav_path: str | Path, n: int = 6, win_s: float = 0.5) -> list[d
     return peaks
 
 
+ASR_PROMPT = "Umm, uh, so, like, you know, I mean, hmm. Uh, um, yeah, okay."   # primes the recogniser to keep disfluencies instead of cleaning them up
+
+
+def _accepts_prompt(client) -> bool:
+    import inspect
+    try:
+        return "prompt" in inspect.signature(client.whisper).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def needs_conditioning(lufs: float | None, noise_floor_db: float | None) -> bool:
     return (lufs is not None and lufs < -21.0) or (noise_floor_db is not None and noise_floor_db > -50.0)
 
@@ -176,6 +188,55 @@ def noise_stats(wav_path: str | Path) -> dict:
     rms = np.sqrt(np.mean(y[: n * win].reshape(n, win) ** 2, axis=1)) + 1e-9
     db = 20 * np.log10(rms)
     return {"noise_floor_db": round(float(np.percentile(db, 10)), 1), "speech_level_db": round(float(np.percentile(db, 90)), 1)}
+
+
+def find_hesitations(wav_path: str | Path, words: list[dict], noise_floor_db: float | None, min_len: float = 0.25, max_len: float = 1.2) -> list[dict]:
+    """Filled pauses ("um", "uh", "mm") that a recogniser dropped from its transcript: a steady voiced sound (stable pitch for 0.25-1.2 s)
+    that no recognised word explains. Only stretches outside the cores of the recognised words are examined, so a held vowel inside a word
+    is never touched. Returns [{start, end, f0, level_db}]. Pitch tracking (pyin) runs on those stretches only."""
+    import numpy as np
+    import soundfile as sf
+    y, sr = sf.read(str(wav_path), dtype="float32")
+    if y.ndim > 1:
+        y = y.mean(axis=1)
+    dur = len(y) / sr
+    # word cores: a recogniser often stretches a word's end over the pause after it, so only the first 0.12 s per letter (+0.25 s) count
+    cores = []
+    for w in words:
+        end = min(w["end"], w["start"] + 0.25 + 0.1 * len(w["word"]))
+        cores.append((w["start"], end))
+    free, cur = [], 0.0
+    for a, b in sorted(cores):
+        if a - cur >= min_len:
+            free.append((cur, a))
+        cur = max(cur, b)
+    if dur - cur >= min_len:
+        free.append((cur, dur))
+    import librosa
+    hop = 160
+    out = []
+    for a, b in free:
+        seg = y[int(max(a - 0.05, 0) * sr): int(min(b + 0.05, dur) * sr)]
+        if len(seg) < 2048:
+            continue
+        f0, vf, _ = librosa.pyin(seg, fmin=70, fmax=350, sr=sr, frame_length=1024, hop_length=hop)
+        rms = librosa.feature.rms(y=seg, frame_length=1024, hop_length=hop)[0][: len(f0)]
+        db = 20 * np.log10(rms + 1e-9)
+        t0 = max(a - 0.05, 0)
+        i = 0
+        while i < len(f0):
+            if vf[i] and not np.isnan(f0[i]) and f0[i] > 75 and (noise_floor_db is None or db[i] > noise_floor_db + 6):
+                j = i
+                while j + 1 < len(f0) and vf[j + 1] and not np.isnan(f0[j + 1]) and f0[j + 1] > 75 and abs(np.log2(f0[j + 1] / f0[j])) < 0.03 and (noise_floor_db is None or db[j + 1] > noise_floor_db + 6):
+                    j += 1
+                length = (j - i + 1) * hop / sr
+                if min_len <= length <= max_len:
+                    out.append({"start": round(t0 + i * hop / sr, 3), "end": round(t0 + (j + 1) * hop / sr, 3), "f0": round(float(np.nanmean(f0[i:j + 1])), 1),
+                                "level_db": round(float(db[i:j + 1].mean()), 1)})
+                i = j + 1
+            else:
+                i += 1
+    return out
 
 
 BEAT_SNAP_S = 0.12
@@ -245,7 +306,7 @@ def build_inputs(video_path: str | Path, work_dir: str | Path, analysis: dict | 
                 asr_wav = wav16
         if client is not None:
             try:
-                r = client.whisper(asr_wav)
+                r = client.whisper(asr_wav, prompt=ASR_PROMPT) if _accepts_prompt(client) else client.whisper(asr_wav)
                 words, segments, language, asr_cost = r.words, r.segments, r.language or "unknown", r.cost_usd
             except Exception:
                 words = []
@@ -259,6 +320,12 @@ def build_inputs(video_path: str | Path, work_dir: str | Path, analysis: dict | 
     for st in steps or []:
         for t, ctx in parse_times(st["text"], dur):
             analysis_times.append({"t": t, "step_id": st["id"], "context": ctx})
+    hes = []
+    if info["has_audio"] and len(words) >= 3:
+        try:
+            hes = find_hesitations(wav16, words, noise.get("noise_floor_db"))
+        except Exception:
+            hes = []
     cuts = ffx.scene_cuts(video_path)
     has_music = detect_music(analysis)
     beats, bpm, music_driven = [], 0.0, False
@@ -272,4 +339,4 @@ def build_inputs(video_path: str | Path, work_dir: str | Path, analysis: dict | 
                   is_9x16=info["is_9x16"], has_audio=info["has_audio"], language=language, words=words, segments=segs,
                   scene_cuts=cuts, silences=silences, energy_peaks=peaks, has_music=has_music,
                   has_speech=len(words) >= 3, beats=beats, bpm=bpm, music_driven=music_driven, analysis_times=analysis_times,
-                  stats_version=2, lufs=loud.get("lufs"), true_peak_db=loud.get("true_peak_db"), noise_floor_db=noise.get("noise_floor_db"), speech_level_db=noise.get("speech_level_db"), fillers=find_fillers(words), asr_cost_usd=asr_cost)
+                  stats_version=2, lufs=loud.get("lufs"), true_peak_db=loud.get("true_peak_db"), noise_floor_db=noise.get("noise_floor_db"), speech_level_db=noise.get("speech_level_db"), fillers=find_fillers(words), hesitations=hes, asr_cost_usd=asr_cost)

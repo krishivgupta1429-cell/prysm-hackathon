@@ -18,11 +18,11 @@ from app.studio.autoedit.presets import resolve_style
 
 # A "group" is a bundle of ops that is verified and kept or reverted as one unit. The system assigns it from the op type (bundle_for);
 # whatever group a planner or a revision names is ignored. SAFE bundles are objectively checkable and low-risk; RISKY ones are matters of taste.
-GROUPS = ("hook", "pacing", "captions", "audio", "text", "zoom", "rhythm", "polish")
-RISK = {"hook": "safe", "pacing": "safe", "captions": "safe", "audio": "safe", "text": "risky", "zoom": "risky", "rhythm": "risky", "polish": "risky"}
-OP_TYPES = ("trim", "cut_segment", "remove_filler", "cold_open", "text_overlay", "caption_burn", "zoom_punch", "loudnorm", "music_duck", "sfx")
+GROUPS = ("hook", "pacing", "captions", "audio", "text", "zoom", "rhythm", "sound", "polish")
+RISK = {"hook": "safe", "pacing": "safe", "captions": "safe", "audio": "safe", "text": "risky", "zoom": "risky", "rhythm": "risky", "sound": "risky", "polish": "risky"}
+OP_TYPES = ("trim", "cut_segment", "remove_filler", "cold_open", "text_overlay", "caption_burn", "zoom_punch", "loudnorm", "music_duck", "sfx", "sfx_hit")
 DEFAULT_TARGET = {"hook": "Hook & Opening", "pacing": "Retention & Pacing", "captions": "On-Screen Text", "audio": "Audio & Music",
-                  "text": "On-Screen Text", "zoom": "Visual Quality & Originality", "rhythm": "Retention & Pacing", "polish": "Audio & Music"}
+                  "text": "On-Screen Text", "zoom": "Visual Quality & Originality", "rhythm": "Retention & Pacing", "sound": "Audio & Music", "polish": "Audio & Music"}
 TEXT_LIMITS = {"hook": 42, "label": 36, "cta": 48}
 MAX_HOOK_WORDS = 8
 REMOVING = ("trim", "cut_segment", "remove_filler")
@@ -44,6 +44,8 @@ def bundle_for(op_type: str, params: dict) -> str:
         return "zoom"
     if op_type == "loudnorm":
         return "audio"
+    if op_type == "sfx_hit":
+        return "sound"
     if op_type in ("music_duck", "sfx"):
         return "polish"
     return "rhythm" if (params.get("beat") or params.get("removes_speech")) else "pacing"
@@ -60,6 +62,7 @@ class Op(BaseModel):
     source_step_id: str | None = None
     target_parameter: str = ""
     reason: str = ""
+    finding: str = ""   # the retention finding / fix step this change answers (shown to the creator)
     params: dict = Field(default_factory=dict)
     enabled: bool = True
 
@@ -189,8 +192,14 @@ def _validate_op(op: Op, inp: Inputs, allowed: list[float]) -> None:
     p = op.params
     dur = inp.duration
     if op.type in ("trim", "cut_segment"):
-        _snap_param(p, "start", allowed, inp)
-        _snap_param(p, "end", allowed, inp)
+        for k in ("start", "end"):
+            if p.get("silence"):   # measured from the signal by the system itself: exact, inside the video, not snapped to a transcript time
+                t = _num(p.get(k), k)
+                if not (-1e-6 <= t <= dur + 1e-6):
+                    raise ValueError(f"{k}={t:g}s is outside the video (0-{dur:.1f}s)")
+                p[k] = round(t, 3)
+            else:
+                _snap_param(p, k, allowed, inp)
         if inp.music_driven and not p.get("silence"):  # a music-driven reel cuts on the beat (within 120 ms), never at the very start / end of the file
             for k in ("start", "end"):
                 if 0.3 < p[k] < dur - 0.3:
@@ -264,6 +273,14 @@ def _validate_op(op: Op, inp: Inputs, allowed: list[float]) -> None:
         p["target_lufs"] = round(min(max(_num(p.get("target_lufs", -14), "target_lufs"), -16), -12), 1)
         p["true_peak"] = round(min(max(_num(p.get("true_peak", -1.5), "true_peak"), -3), -1), 1)
         p["denoise"] = bool(p.get("denoise", True))
+    elif op.type == "sfx_hit":
+        from app.studio.autoedit import sfxlib
+        _snap_param(p, "at", allowed, inp)
+        if p["at"] > dur - 0.3:
+            raise ValueError("too close to the end for a sound effect")
+        kind = p.get("kind") if p.get("kind") in sfxlib.MOMENTS else "emphasis"
+        p["kind"] = kind
+        p["effect"] = sfxlib.effect_for(kind, p.get("effect"))
     elif op.type == "sfx":
         p["level_db"] = round(min(max(_num(p.get("level_db", -22), "level_db"), -30), -12), 1)  # always mixed low
     elif op.type == "music_duck":
@@ -297,6 +314,10 @@ def removal_ranges(ops: list[Op], inp: Inputs) -> list[tuple[float, float]]:
     for a, b, exact in ranges:
         # a stretch the silence detector found is cut exactly: a recogniser's word times across a silence (sung or held words) are not reliable
         a2, b2, _ = (a, b, []) if (exact or not inp.words) else align_removal(a, b, inp.words, inp.duration)
+        if exact:   # the region was already measured from the signal and given its own margins: cut it as it is
+            if b2 - a2 >= 0.1:
+                out.append((round(a2, 3), round(b2, 3)))
+            continue
         pad = pad_for(a2, b2)
         if pad is None:
             continue
@@ -365,6 +386,8 @@ def validate_edl(raw: dict | EDL, inp: Inputs, style_overrides: dict | None = No
         else:
             last = z.params["at"]
 
+    _enforce_density(kept, dropped, resolve_style(edl.style.get("preset") if edl.style else None, {**(edl.style or {}), **(style_overrides or {})}), inp)
+
     # only one text overlay on screen at a time (keep the earlier one; the later becomes a manual tip)
     ovs = sorted((o for o in kept if o.type == "text_overlay"), key=lambda o: (o.params["start"], o.params["end"]))
     cur_end = -1.0
@@ -397,6 +420,34 @@ def validate_edl(raw: dict | EDL, inp: Inputs, style_overrides: dict | None = No
     edl.manual_tips = tips
     edl.style = resolve_style(edl.style.get("preset") if edl.style else None, {**(edl.style or {}), **(style_overrides or {})})
     return Validation(edl=edl, dropped=dropped, errors=errors, notes=notes)
+
+
+def effect_time(o: Op) -> float | None:
+    p = o.params
+    return p.get("at") if o.type in ("zoom_punch", "sfx_hit") else None
+
+
+def _enforce_density(kept: list[Op], dropped: list[dict], style: dict | None, inp: Inputs) -> None:
+    """Effects are zoom punches and sound effects. At least MIN_EFFECT_GAP_S between any two, at most one sound per MIN_SOUND_GAP_S, and no more
+    than the intensity's cap in any 10 s window. The earlier effect wins; an effect that does not fit is dropped with the reason."""
+    from app.studio.autoedit import sfxlib
+    cap = sfxlib.PER_10S.get((style or {}).get("intensity", "balanced"), 3)
+    eff = sorted((o for o in kept if effect_time(o) is not None), key=lambda o: (effect_time(o), o.type != "sfx_hit"))
+    keep: list[Op] = []
+    for o in eff:
+        t = effect_time(o)
+        why = None
+        if keep and t - effect_time(keep[-1]) < sfxlib.MIN_EFFECT_GAP_S:
+            why = f"closer than {sfxlib.MIN_EFFECT_GAP_S} s to another effect"
+        elif o.type == "sfx_hit" and any(k.type == "sfx_hit" and t - effect_time(k) < sfxlib.MIN_SOUND_GAP_S for k in keep):
+            why = f"more than one sound effect within {sfxlib.MIN_SOUND_GAP_S:g} s"
+        elif sum(1 for k in keep if t - 10.0 < effect_time(k) <= t) >= cap:
+            why = f"more than {cap} effects in 10 s (intensity {(style or {}).get('intensity', 'balanced')})"
+        if why:
+            kept.remove(o)
+            dropped.append({"op": o.model_dump(), "reason": "density limit: " + why})
+        else:
+            keep.append(o)
 
 
 def ops_by_group(edl: EDL) -> dict[str, list[Op]]:

@@ -32,16 +32,29 @@ def _note(out: AutoOps, area: str, text: str) -> None:
     out.notes.append({"area": area, "text": text})
 
 
+def creator_caption_share(analysis: dict) -> float:
+    """Share of analysed frames that show the creator's own CAPTIONS: text in most frames AND text that changes from frame to frame.
+    A logo, a watermark or a title card shows the same words in every frame; that is not a caption track and does not count."""
+    frames = ((analysis or {}).get("visionData") or {}).get("frames") or []
+    texts = [(f.get("onScreenText") or "").strip() for f in frames]
+    shown = [t for t in texts if t]
+    if not frames or not shown:
+        return 0.0
+    if len(set(shown)) / len(shown) < 0.4:
+        return 0.0
+    return len(shown) / len(frames)
+
+
 def caption_op(inp: Inputs, analysis: dict, out: AutoOps) -> None:
     if not inp.has_speech:
         _note(out, "captions", f"No captions: only {len(inp.words)} spoken words were recognised, so there is nothing to caption.")
         return
-    share = existing_caption_share(analysis or {})
+    share = creator_caption_share(analysis or {})
     op = Op(id="auto_captions", type="caption_burn", group="captions", target_parameter="On-Screen Text",
             reason="Burned-in word-by-word captions: most viewers watch with the sound off")
     if share >= CREATOR_CAPTIONS_SHARE:
         op.enabled = False
-        _note(out, "captions", f"Captions left off by default: {share:.0%} of the frames already show the creator's own text. Turn them on if that is not captions.")
+        _note(out, "captions", f"Captions left off by default: {share:.0%} of the frames already show the creator's own captions (text that changes with the speech). Turn them on if that is not captions.")
     else:
         _note(out, "captions", f"Captions added for {len(inp.words)} spoken words ({inp.language}).")
     out.ops.append(op)
@@ -70,59 +83,47 @@ def audio_op(inp: Inputs, out: AutoOps) -> None:
 
 
 def pacing_ops(inp: Inputs, style: dict, out: AutoOps) -> None:
-    """Dead air and clear fillers. Dead air = (a) a pause between two spoken words that is long enough, and (b) a stretch of real silence
-    found by the silence detector. A pause is only cut when no music bed plays through it. On a reel cut to music, only real silence
-    is cut (the beat-synced cuts of the planner are a separate RISKY bundle)."""
+    """Dead air, tightened. What counts as a pause is decided by the SIGNAL (the silence detector, and for sounds the recogniser dropped a
+    pitch tracker), never by word timestamps, which are only good to ~0.1-0.2 s and often stretch a word over the pause after it. A pause
+    is not removed whole: it is shortened to a natural beat (`keep` seconds on each side stay), so speech keeps its rhythm. Clear filler
+    words the recogniser did write down are cut too (whole words, with their own padding). On a reel cut to music only silences of 0.8 s
+    or more are touched."""
     if not inp.has_audio:
         return
     aggr = float(style.get("cut_aggressiveness", 0.5))
-    min_gap = max(0.5, MIN_GAP_S + (0.5 - aggr) * 0.6)
-    words = inp.words
-    silent = [s for s in inp.silences if s.get("end") is not None]
-
-    def quiet_part(a: float, b: float) -> list[tuple[float, float]]:
-        """The parts of [a, b] the silence detector measured as silent. A recogniser's word times are only good to ~0.1-0.2 s, so a pause is cut
-        only where the SIGNAL is silent (this also keeps music beds and breaths out of the cut)."""
-        out = []
-        for s in silent:
-            lo, hi = max(a, s["start"]), min(b, s["end"])
-            if hi - lo >= 0.3:
-                out.append((lo, hi))
-        return out
-
-    cands: list[tuple[float, float, float, str]] = []   # (length, start, end, kind)
+    keep = min(max(0.14 - (aggr - 0.5) * 0.08, 0.08), 0.2)
+    min_silence = 0.8 if inp.music_driven else max(0.25, 0.36 - (aggr - 0.5) * 0.2)
+    cands: list[tuple[float, float, float, str]] = []   # (removed seconds, start, end, kind)
+    for s in inp.silences:
+        a, b = s["start"], s["end"] if s.get("end") is not None else inp.duration
+        if b - a < min_silence:
+            continue
+        lo = a + (keep if a > 0.05 else 0.0)                 # a silence at the very start is cut right up to the first sound
+        hi = b - (keep if b < inp.duration - 0.05 else 0.0)  # and one at the very end from just after the last
+        if hi - lo >= 0.1:
+            cands.append((hi - lo, lo, hi, "silence"))
     if inp.has_speech and not inp.music_driven:
-        for i in range(len(words) - 1):
-            a, b = words[i]["end"], words[i + 1]["start"]
-            if b - a >= min_gap:
-                for lo, hi in quiet_part(a, b):
-                    if hi - lo >= min_gap * 0.8:
-                        cands.append((hi - lo, lo, hi, "silence"))
-        if words and words[0]["start"] >= 1.0:
-            for lo, hi in quiet_part(0.0, words[0]["start"]):
-                if lo <= 0.05 and hi - lo >= 1.0:
-                    cands.append((hi - lo, lo, hi, "silence"))
-    for s in silent:  # real silence anywhere (a stretch with no words at all, e.g. a held pose), at least 0.8 s
-        a, b = s["start"], s["end"]
-        if b - a >= max(min_gap, 0.8) and 0.2 < a and b < inp.duration - 0.2 and not any(a < c[2] and b > c[1] for c in cands):
-            cands.append((b - a, a, b, "silence"))
-    for s in inp.silences:  # silence running to the very end of the file
-        if s.get("end") is None and inp.duration - s["start"] >= 1.0 and not any(s["start"] < c[2] and inp.duration > c[1] for c in cands):
-            cands.append((inp.duration - s["start"], s["start"], inp.duration, "silence"))
+        for h in inp.hesitations:
+            cands.append((h["end"] - h["start"], max(h["start"] - 0.02, 0.0), h["end"] + 0.02, "hesitation"))
     cands.sort(reverse=True)
     budget = inp.duration * config.MAX_REMOVED_FRACTION * 0.8
-    removed = 0.0
-    n = 0
+    removed, n = 0.0, 0
     chosen = []
-    for length, a, b, kind in cands[:MAX_AUTO_CUTS]:
-        if removed + length > budget:
+    for length, a, b, kind in cands[:MAX_AUTO_CUTS * 2]:
+        if len(chosen) >= MAX_AUTO_CUTS * 2 or removed + length > budget or any(a < c[2] and b > c[1] for c in chosen):
             continue
         removed += length
         chosen.append((length, a, b, kind))
         n += 1
-        where = "at the start" if a <= 0.05 else "at the end" if b >= inp.duration - 0.05 else "between words" if any(w["end"] <= a + 0.3 for w in words) else ""
-        op = Op(id=f"auto_silence{n}", type="cut_segment", group="pacing", target_parameter="Retention & Pacing",
-                reason=f"Cut {length:.1f} s of silence" + (f" {where}" if where else ""), params={"start": a, "end": b, "silence": True})
+        if kind == "silence":
+            where = "at the start" if a <= 0.05 else "at the end" if b >= inp.duration - 0.05 else ""
+            op = Op(id=f"auto_silence{n}", type="cut_segment", group="pacing", target_parameter="Retention & Pacing",
+                    reason=f"Tighten a pause: cut {length:.1f} s of silence" + (f" {where}" if where else ""),
+                    params={"start": round(a, 3), "end": round(b, 3), "silence": True})
+        else:
+            op = Op(id=f"auto_hesitation{n}", type="cut_segment", group="pacing", target_parameter="Retention & Pacing",
+                    reason=f"Remove an um/uh-like sound ({length:.1f} s) the transcript did not show",
+                    params={"start": round(a, 3), "end": round(b, 3), "silence": True, "hesitation": True})
         out.ops.append(op)
     fillers = []
     if inp.has_speech and not inp.music_driven:
@@ -130,12 +131,13 @@ def pacing_ops(inp: Inputs, style: dict, out: AutoOps) -> None:
     for i, f in enumerate(fillers, 1):
         out.ops.append(Op(id=f"auto_filler{i}", type="remove_filler", group="pacing", target_parameter="Retention & Pacing",
                           reason=f"Remove the filler word \"{f['word']}\"", params={"start": f["start"], "end": f["end"], "word": f["word"]}))
+    hes = sum(1 for c in chosen if c[3] == "hesitation")
     if chosen or fillers:
-        _note(out, "pacing", f"{len(chosen)} dead-air stretches ({removed:.1f} s) and {len(fillers)} filler words found; cuts sit on word boundaries.")
+        _note(out, "pacing", f"{len(chosen) - hes} pauses tightened ({removed:.1f} s cut), {hes} um/uh-like sounds the transcript missed, {len(fillers)} filler words from the transcript.")
     elif inp.music_driven:
         _note(out, "pacing", "No real silence long enough to cut (the reel is cut to music, so pauses between words are left alone).")
     else:
-        _note(out, "pacing", "No dead air or filler words long enough to cut.")
+        _note(out, "pacing", f"No pause of {min_silence:.2f} s or more, no um/uh-like sound and no filler word found: nothing to tighten.")
 
 
 def build(inp: Inputs, analysis: dict, style: dict) -> AutoOps:

@@ -32,10 +32,16 @@ def test_no_captions_without_speech_and_a_reason_is_given():
 
 
 def test_captions_are_left_off_but_kept_as_a_toggle_when_the_creator_already_has_text():
-    analysis = {"visionData": {"frames": [{"onScreenText": "hello"}] * 5 + [{"onScreenText": ""}] * 2}}
+    analysis = {"visionData": {"frames": [{"onScreenText": f"words {i}"} for i in range(5)] + [{"onScreenText": ""}] * 2}}
     auto = defaults.build(make_inputs(lufs=-14.0, noise_floor_db=-60.0), analysis, STYLE)
     cap = ids(auto)["auto_captions"]
     assert cap.enabled is False and any("left off by default" in n["text"] and "71%" in n["text"] for n in auto.notes)
+
+
+def test_a_logo_or_title_that_never_changes_is_not_the_creators_captions():
+    logo = {"visionData": {"frames": [{"onScreenText": "Prysm theprysm.io"}] * 8}}
+    auto = defaults.build(make_inputs(lufs=-14.0, noise_floor_db=-60.0), logo, STYLE)
+    assert ids(auto)["auto_captions"].enabled is True
 
 
 def test_loudness_is_only_added_when_it_is_off_target():
@@ -56,11 +62,11 @@ def test_a_noisy_background_adds_a_denoise_even_at_the_right_loudness():
 
 def test_long_pauses_that_are_really_silent_and_fillers_become_pacing_cuts():
     w = words((0.5, 1.0), (1.1, 1.5), (3.0, 3.4), (3.5, 4.0), (4.1, 4.5))      # a 1.5 s pause after w1
-    inp = make_inputs(duration=10.0, words=w, segments=[], fillers=[{"word": "um", "start": 3.5, "end": 4.0}], silences=[{"start": 1.62, "end": 2.9}], scene_cuts=[],
+    inp = make_inputs(duration=10.0, words=w, segments=[], fillers=[{"word": "um", "start": 3.5, "end": 4.0}], silences=[{"start": 1.62, "end": 3.1}], scene_cuts=[],
                       energy_peaks=[], analysis_times=[], lufs=-14.0, noise_floor_db=-60.0)
     auto = defaults.build(inp, {}, STYLE)
     pause = ids(auto)["auto_silence1"]
-    assert pause.type == "cut_segment" and (pause.params["start"], pause.params["end"]) == (1.62, 2.9) and pause.params["silence"] is True   # the SIGNAL's silence, not the word gap
+    assert pause.type == "cut_segment" and (pause.params["start"], pause.params["end"]) == (1.76, 2.96) and pause.params["silence"] is True   # the SIGNAL's silence, tightened (0.14 s kept each side), not the word gap
     assert ids(auto)["auto_filler1"].type == "remove_filler"
     v = E.validate_edl(EDL(ops=auto.ops), inp)
     assert v.ok and {o.group for o in v.edl.ops} == {"captions", "pacing"}
@@ -160,7 +166,7 @@ def test_a_silence_cut_is_exact_even_when_a_word_timestamp_spans_the_silence(tmp
     cut = next(o for o in auto.ops if o.id.startswith("auto_silence"))
     v = E.validate_edl(EDL(ops=[cut]), inp)
     (lo, hi), = E.removal_ranges(v.edl.ops, inp)
-    assert 4.0 < lo <= 4.15 and 5.85 <= hi < 6.0          # the silence minus 60-120 ms of room tone on each side, not the whole word
+    assert (lo, hi) == (4.14, 5.86)                       # the silence minus 0.14 s of room tone on each side, not the whole word
     clip = make_clip(tmp_path / "c.mp4", seconds=12.0)
     rr = X.render(v.edl, inp, clip, tmp_path / "o.mp4", tmp_path / "w", {"pacing"})
     assert verify.cuts_on_word_gaps(rr, inp.words)["ok"] is False          # by the words alone this looks like a cut through 'chal'
@@ -186,3 +192,26 @@ def test_a_removal_too_short_to_cut_is_switched_off_with_a_reason_not_reported_a
     r = O.Runner(O.new_state("a", "u"), {}, ST.LocalStorage(tmp_path / "s"), meter=CostMeter(), work_dir=tmp_path / "w")
     r.inp, r.faces = inp, []
     assert r._prune_unclean_cuts(edl) == ["f"] and edl.ops[0].enabled is False and "too short" in r.state["op_reverts"]["f"]
+
+
+def test_a_pause_is_tightened_not_removed_and_short_pauses_are_left():
+    inp = make_inputs(duration=10.0, silences=[{"start": 2.0, "end": 2.3}, {"start": 5.0, "end": 5.6}], lufs=-14.0, noise_floor_db=-60.0)
+    auto = defaults.build(inp, {}, STYLE)
+    cuts = [(o.params["start"], o.params["end"]) for o in auto.ops if o.id.startswith("auto_silence")]
+    assert cuts == [(5.14, 5.46)]          # 0.6 s -> 0.28 s; the 0.3 s pause is under the 0.36 s threshold
+
+
+def test_a_steady_voiced_sound_with_no_word_is_found_as_a_hesitation_and_a_word_is_not(tmp_path):
+    import numpy as np
+    import soundfile as sf
+    from app.studio.autoedit import inputs as I
+    sr = 16000
+    t = np.arange(sr * 6) / sr
+    y = 0.003 * np.random.RandomState(1).randn(len(t)).astype("float32")           # a quiet noise floor
+    y[int(2.0 * sr):int(2.6 * sr)] += (0.12 * np.sin(2 * np.pi * 190 * t[int(2.0 * sr):int(2.6 * sr)])).astype("float32")   # 0.6 s steady 190 Hz "mmm" in a gap
+    y[int(4.0 * sr):int(4.5 * sr)] += (0.12 * np.sin(2 * np.pi * 190 * t[int(4.0 * sr):int(4.5 * sr)])).astype("float32")   # the same sound, but a recognised word
+    wav = tmp_path / "h.wav"
+    sf.write(str(wav), y, sr)
+    words = [{"word": "hello", "start": 0.3, "end": 0.8}, {"word": "there", "start": 4.0, "end": 4.5}]
+    found = I.find_hesitations(wav, words, -50.0)
+    assert len(found) == 1 and 1.9 <= found[0]["start"] <= 2.1 and 2.5 <= found[0]["end"] <= 2.7

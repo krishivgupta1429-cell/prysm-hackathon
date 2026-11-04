@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.studio.autoedit import config, ffx, captions, faces as facesmod
+from app.studio.autoedit import config, ffx, captions, fonts as fonts_mod, sfxlib, faces as facesmod
 from app.studio.autoedit.edl import EDL, Op
 from app.studio.autoedit.inputs import Inputs
 from app.studio.autoedit.timeline import Timeline, build_timeline, surviving_words
@@ -35,6 +35,7 @@ class RenderResult:
     seconds: float = 0.0
     ops_applied: list[str] = field(default_factory=list)
     style: dict = field(default_factory=dict)   # the style actually used (the caption position may have moved off a face)
+    sfx_hits: list[dict] = field(default_factory=list)   # [{id, out_at, effect, kind}] sound effects placed on the output timeline
 
 
 def render_key(src_id: str, edl: EDL, groups: set[str], proxy: bool = False) -> str:
@@ -116,6 +117,14 @@ def place_overlay(text: str, role: str, wanted: str, face_y: tuple[float, float]
         if face_y is None or bottom < face_y[0] or top > face_y[1]:
             return pos
     return wanted
+
+
+def fontsdir_for(style: dict, work: Path) -> Path:
+    """The directory libass reads fonts from: the bundled Poppins plus the files this edit's fonts resolved to."""
+    files = [f for spec in (style.get("fonts") or {}).values() for f in spec.get("files", [])]
+    if not files:
+        return config.FONTS_DIR
+    return fonts_mod.prepare_fontsdir(files, Path(work) / "fonts")
 
 
 def caption_band(pos: str, size: int) -> tuple[float, float]:
@@ -262,6 +271,7 @@ class Pieces:
     notes: list
     applied: list
     style: dict = field(default_factory=dict)
+    sfx_hits: list = field(default_factory=list)
 
 
 def plan_pieces(edl: EDL, inp: Inputs, groups: set[str], faces: list[dict] | None = None) -> Pieces:
@@ -269,6 +279,8 @@ def plan_pieces(edl: EDL, inp: Inputs, groups: set[str], faces: list[dict] | Non
     mapped onto the new timeline. Pure (no files), so cached renders can be re-described and tests can check it."""
     active = [o for o in edl.ops if o.enabled and o.group in groups]
     style = edl.style
+    if style.get("sfx") is False:   # the creator's global switch: no synthesised sound at all
+        active = [o for o in active if o.type not in ("sfx", "sfx_hit")]
     tl = build_timeline(active, inp, DISSOLVE_S if style.get("transition") == "dissolve" else 0.0)
     notes: list[str] = []
     applied: list[str] = [o.id for o in active]
@@ -343,7 +355,17 @@ def plan_pieces(edl: EDL, inp: Inputs, groups: set[str], faces: list[dict] | Non
         zooms.append({"id": o.id, "out_at": at, "scale": scale, "fx": fx, "fy": fy, "fw": fw, "fh": fh, "face": bool(f)})
         last_out, k = at, k + 1
 
-    return Pieces(active, tl, words_out, overlays, zooms, notes, applied, style)
+    hits = []
+    for o in sorted((o for o in active if o.type == "sfx_hit"), key=lambda o: o.params["at"]):
+        at = tl.map_time(o.params["at"])
+        if at is None or at > tl.duration - 0.2:
+            notes.append(f"sound effect {o.id} skipped (that moment was cut out)")
+            applied.remove(o.id)
+            continue
+        hits.append({"id": o.id, "out_at": round(at, 3), "effect": o.params["effect"], "kind": o.params["kind"]})
+    if style.get("sfx") is False:
+        applied = [i for i in applied if i not in {x.id for x in edl.ops if x.type in ("sfx", "sfx_hit")}]
+    return Pieces(active, tl, words_out, overlays, zooms, notes, applied, style, hits)
 
 
 def render(edl: EDL, inp: Inputs, src: str | Path, out: str | Path, work: str | Path, groups: set[str], *,
@@ -374,7 +396,7 @@ def render(edl: EDL, inp: Inputs, src: str | Path, out: str | Path, work: str | 
     if words_out or overlays:
         ass_path = work / "captions.ass"
         ass_path.write_text(captions.build_ass(words_out, overlays, style, tl.duration, with_captions=bool(words_out)), encoding="utf-8")
-        fonts = str(config.FONTS_DIR).replace("\\", "/").replace(":", "\\:")
+        fonts = str(fontsdir_for(style, work)).replace("\\", "/").replace(":", "\\:")
         vlines.append(f"{cur}ass='{str(ass_path).replace(chr(92), '/').replace(':', chr(92) + ':')}':fontsdir='{fonts}'[vout]")
     else:
         vlines.append(f"{cur}null[vout]")
@@ -395,6 +417,22 @@ def render(edl: EDL, inp: Inputs, src: str | Path, out: str | Path, work: str | 
             tail = "[asfx]"
         elif sx is not None:
             notes.append("sfx skipped: no visible cuts to put a sound on")
+        if pc.sfx_hits:
+            hl, hlabels = [], []
+            for i, h in enumerate(pc.sfx_hits):
+                line, lab = sfxlib.lines(i, h["effect"], h["out_at"], sfxlib.gain_db(h["effect"], inp.lufs, style.get("intensity", "balanced")))
+                hl.append(line)
+                hlabels.append(lab)
+            alines += hl
+            bus = hlabels[0] if len(hlabels) == 1 else None
+            if bus is None:
+                alines.append(f"{''.join(hlabels)}amix=inputs={len(hlabels)}:normalize=0:duration=longest:dropout_transition=0[hbus]")
+                bus = "[hbus]"
+            # the effects sit under the voice and are pulled further down whenever the voice is speaking (sidechain compression)
+            alines.append(f"{tail}asplit=2[vmain][vkey]")
+            alines.append(f"{bus}[vkey]sidechaincompress=threshold=0.04:ratio=8:attack=5:release=250[hduck]")
+            alines.append("[vmain][hduck]amix=inputs=2:normalize=0:duration=first:dropout_transition=0[ahits]")
+            tail = "[ahits]"
         if ln is not None:
             m = None
             try:
@@ -425,4 +463,4 @@ def render(edl: EDL, inp: Inputs, src: str | Path, out: str | Path, work: str | 
     out.parent.mkdir(parents=True, exist_ok=True)
     ffx.run(cmd, timeout=1200)
     return RenderResult(path=out, duration=tl.duration, timeline=tl, overlays=overlays, caption_words=words_out, zooms=zooms,
-                        ass_path=ass_path, notes=notes, seconds=round(time.time() - t0, 2), ops_applied=applied, style=style)
+                        ass_path=ass_path, notes=notes, seconds=round(time.time() - t0, 2), ops_applied=applied, style=style, sfx_hits=pc.sfx_hits)

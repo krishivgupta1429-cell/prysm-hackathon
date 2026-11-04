@@ -172,7 +172,7 @@ def plan(analysis: dict, inp: Inputs, llm: EditLLM, preset: str = "clean", step_
     raise ValueError("the planner returned no usable plan twice")
 
 
-def merge_auto(edl: EDL, auto_ops: list, inp: Inputs) -> tuple[Validation, list[dict]]:
+def merge_auto(edl: EDL, auto_ops: list, inp: Inputs, style_overrides: dict | None = None) -> tuple[Validation, list[dict]]:
     """The system's own ops (defaults.build) first, then the planner's judgement ops. The planner's loudnorm / caption_burn are dropped:
     those are decided from measurements. Returns the validated union and the notes about what was dropped."""
     notes = []
@@ -182,9 +182,11 @@ def merge_auto(edl: EDL, auto_ops: list, inp: Inputs) -> tuple[Validation, list[
         if o.type in ("loudnorm", "caption_burn"):
             notes.append({"area": "planner", "text": f"The planner's {o.type} was ignored: the system decides it from measurements."})
         else:
+            o.params.pop("silence", None)      # only the system's own signal-measured cuts may skip the timestamp rules
+            o.params.pop("hesitation", None)
             theirs.append(o)
     merged = EDL(ops=mine + theirs, style=edl.style, manual_tips=list(edl.manual_tips))
-    v = validate_edl(merged, inp)
+    v = validate_edl(merged, inp, style_overrides)
     if v.errors:
         v = force_valid(v.edl, inp)
     return v, notes

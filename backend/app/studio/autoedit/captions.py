@@ -40,19 +40,32 @@ def _ends_sentence(word: str) -> bool:
     return bool(re.search(r"[.!?।]$", word.strip()))
 
 
+MAX_CHUNK_WORDS, MIN_CHUNK_WORDS = 5, 3
+
+
 def chunk_words(words: list[dict], size: int) -> list[list[dict]]:
-    """Group words into caption chunks of at most two lines: a new chunk starts after a pause, a sentence end or when two lines are full."""
+    """Caption chunks of 3-5 words (fewer only at a pause, a sentence end or a change of cut), at most two lines. A chunk is closed when it has
+    5 words, when the next word follows a pause or a sentence end (and the chunk has at least 2 words), when the segment changes, or when
+    two lines are full."""
     limit = max_line_chars(size) * 2
     chunks, cur, chars = [], [], 0
     for i, w in enumerate(words):
         gap = w["start"] - words[i - 1]["end"] if i else 0.0
-        if cur and (gap > PAUSE_BREAK_S or w.get("seg") != cur[-1].get("seg") or _ends_sentence(cur[-1]["word"]) or chars + len(w["word"]) + 1 > limit):
-            chunks.append(cur)
-            cur, chars = [], 0
+        if cur:
+            brk = (len(cur) >= MAX_CHUNK_WORDS or w.get("seg") != cur[-1].get("seg") or chars + len(w["word"]) + 1 > limit
+                   or ((gap > PAUSE_BREAK_S or _ends_sentence(cur[-1]["word"])) and len(cur) >= 2)
+                   or (_ends_sentence(cur[-1]["word"]) and len(cur) >= MIN_CHUNK_WORDS - 1))
+            if brk:
+                chunks.append(cur)
+                cur, chars = [], 0
         cur.append(w)
         chars += len(w["word"]) + 1
     if cur:
         chunks.append(cur)
+    # a lone trailing word is glued to the previous chunk when that still fits in 5 words / two lines
+    if len(chunks) >= 2 and len(chunks[-1]) == 1 and len(chunks[-2]) < MAX_CHUNK_WORDS and chunks[-1][0]["start"] - chunks[-2][-1]["end"] <= PAUSE_BREAK_S \
+            and chunks[-1][0].get("seg") == chunks[-2][-1].get("seg") and sum(len(x["word"]) + 1 for x in chunks[-2] + chunks[-1]) <= limit:
+        chunks[-2] += chunks.pop()
     return chunks
 
 
@@ -72,6 +85,35 @@ def split_lines(words: list[str], size: int) -> list[list[int]]:
     return [list(range(best)), list(range(best, len(words)))]
 
 
+def _fontspec(style: dict, role: str) -> dict:
+    """The resolved font of a role ('caption' | 'headline'): {name, bold, dv_name?, dv_bold?}; Poppins when the run resolved none."""
+    spec = (style.get("fonts") or {}).get(role)
+    if spec:
+        return spec
+    w = style.get("caption_font_weight", "bold") if role == "caption" else "extrabold"
+    return {"name": config.FONT_NAME, "bold": w != "regular"}
+
+
+def _dv(word: str) -> bool:
+    return any(0x0900 <= ord(c) <= 0x097F for c in word)
+
+
+def _word_font(text: str, spec: dict) -> str:
+    """The word, drawn with the family's Devanagari file when it is a Devanagari word (the Google subsets are split by script)."""
+    if spec.get("dv_name") and _dv(text):
+        return "{\\fn%s\\b%d}%s{\\fn%s\\b%d}" % (spec["dv_name"], 1 if spec.get("dv_bold") else 0, text, spec["name"], 1 if spec["bold"] else 0)
+    return text
+
+
+ANIMATIONS = {
+    "pop": "{\\fscx70\\fscy70\\t(0,110,\\fscx110\\fscy110)\\t(110,200,\\fscx100\\fscy100)}",
+    "bounce": "{\\fscx60\\fscy60\\t(0,120,\\fscx118\\fscy118)\\t(120,200,\\fscx94\\fscy94)\\t(200,280,\\fscx100\\fscy100)}",
+    "fade": "{\\fad(140,0)}",
+    "slide": "{\\fscy40\\fad(100,0)\\t(0,160,\\fscy100)}",
+    "none": "",
+}
+
+
 def _esc(text: str) -> str:
     return text.replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", " ")
 
@@ -86,6 +128,11 @@ def caption_events(words: list[dict], style: dict) -> list[dict]:
     """[{start, end, text(ASS), plain, chunk}] one event per highlighted-word state."""
     size = int(style["caption_size"])
     base, hi = tag_color(style["caption_color"]), tag_color(style["highlight_color"])
+    accent = tag_color(style.get("accent") or style["highlight_color"])
+    spec = _fontspec(style, "caption")
+    emph = {round(float(t), 2) for t in style.get("emphasis") or []}
+    anim = ANIMATIONS.get(style.get("animation") or "none", "")
+    big = int(size * 1.22)
     chunks = chunk_words(words, size)
     events = []
     for ci, chunk in enumerate(chunks):
@@ -105,10 +152,19 @@ def caption_events(words: list[dict], style: dict) -> list[dict]:
             for line in lines:
                 toks = []
                 for idx in line:
-                    toks.append("{\\c%s}%s{\\c%s}" % (hi, texts[idx], base) if idx == k and hi != base
-                                else texts[idx])
+                    word = _word_font(texts[idx], spec)
+                    emphasised = round(float(chunk[idx].get("src_start", chunk[idx]["start"])), 2) in emph
+                    spoken = idx == k and hi != base
+                    if emphasised:   # a word the director singled out: bigger, in the accent colour, for the whole chunk
+                        tok = "{\\fs%d\\c%s}%s{\\fs%d\\c%s}" % (big, hi if spoken else accent, word, size, base)
+                    elif spoken:
+                        tok = "{\\c%s}%s{\\c%s}" % (hi, word, base)
+                    else:
+                        tok = word
+                    toks.append(tok)
                 parts.append(" ".join(toks))
-            events.append({"start": start, "end": end, "text": "\\N".join(parts), "plain": " ".join(texts), "chunk": ci})
+            text = "\\N".join(parts)
+            events.append({"start": start, "end": end, "text": (anim + text) if k == 0 else text, "plain": " ".join(texts), "chunk": ci})
     return _no_overlap_between_chunks(events)
 
 
@@ -127,8 +183,9 @@ def _no_overlap_between_chunks(events: list[dict]) -> list[dict]:
 
 def build_ass(words: list[dict], overlays: list[dict], style: dict, out_duration: float, with_captions: bool = True) -> str:
     """The whole subtitle file. `overlays` = [{text, start, end, position, role}] already on the output timeline."""
-    weight = FONT_FILES.get(style.get("caption_font_weight", "bold"), FONT_FILES["bold"])
-    bold = -1 if "Bold" in weight else 0
+    cap_font, head_font = _fontspec(style, "caption"), _fontspec(style, "headline")
+    bold = -1 if cap_font["bold"] else 0
+    hbold = -1 if head_font["bold"] else 0
     align, mv = POSITION_MARGINS[style["caption_position"]]
     size, hook = int(style["caption_size"]), int(style["hook_size"])
     white = ass_color(style["caption_color"])
@@ -141,15 +198,15 @@ def build_ass(words: list[dict], overlays: list[dict], style: dict, out_duration
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: Caption,{config.FONT_NAME},{size},{white},{white},{outline},{shadow},{bold},0,0,0,100,100,0,0,1,{max(4, size // 14)},2,{align},{lr},{rmargin},{mv},1",
+        f"Style: Caption,{cap_font['name']},{size},{white},{white},{outline},{shadow},{bold},0,0,0,100,100,0,0,1,{max(4, size // 14)},2,{align},{lr},{rmargin},{mv},1",
     ]
     box = bool(style.get("overlay_box"))
     for role, sz in (("Hook", hook), ("Label", int(hook * 0.72)), ("Cta", int(hook * 0.72))):
         for pos, (a, m) in OVERLAY_POSITIONS.items():
             if box:
-                head.append(f"Style: {role}{pos.title()},{config.FONT_NAME},{sz},{white},{white},{ass_color('000000', 0x40)},{ass_color('000000', 0x40)},-1,0,0,0,100,100,0,0,3,14,0,{a},{lr},{rmargin},{m},1")
+                head.append(f"Style: {role}{pos.title()},{head_font['name']},{sz},{white},{white},{ass_color('000000', 0x40)},{ass_color('000000', 0x40)},{hbold},0,0,0,100,100,0,0,3,14,0,{a},{lr},{rmargin},{m},1")
             else:
-                head.append(f"Style: {role}{pos.title()},{config.FONT_NAME},{sz},{white},{white},{outline},{shadow},-1,0,0,0,100,100,0,0,1,{max(5, sz // 12)},3,{a},{lr},{rmargin},{m},1")
+                head.append(f"Style: {role}{pos.title()},{head_font['name']},{sz},{white},{white},{outline},{shadow},{hbold},0,0,0,100,100,0,0,1,{max(5, sz // 12)},3,{a},{lr},{rmargin},{m},1")
     head += ["", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
     lines = []
     if with_captions:
@@ -160,7 +217,7 @@ def build_ass(words: list[dict], overlays: list[dict], style: dict, out_duration
         role = o.get("role", "label").title()
         pos = o.get("position", "top").title()
         fade = "{\\fad(250,250)}"
-        lines.append(f"Dialogue: 2,{_ts(o['start'])},{_ts(min(o['end'], out_duration))},{role}{pos},,0,0,0,,{fade}{_esc(o['text'])}")
+        lines.append(f"Dialogue: 2,{_ts(o['start'])},{_ts(min(o['end'], out_duration))},{role}{pos},,0,0,0,,{fade}{' '.join(_word_font(w, head_font) for w in _esc(o['text']).split(' '))}")
     return "\n".join(head + lines) + "\n"
 
 

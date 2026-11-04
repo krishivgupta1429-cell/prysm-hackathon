@@ -68,6 +68,11 @@ def env(tmp_path, monkeypatch):
     uid, aid = "u1", "a1"
     store.put_file(ST.upload_key(uid, aid), clip)
     edl = E.validate_edl({"ops": PLAN_OPS}, make_inputs()).edl
+    from app.studio.autoedit import fonts as fonts_mod
+
+    def offline(url, headers):
+        raise OSError("offline in tests")
+    monkeypatch.setattr(fonts_mod, "_http_get", offline)
     monkeypatch.setattr(planner, "plan", lambda analysis, inp, llm, preset="clean", steps=None: planner.PlanResult(edl, E.Validation(edl), 1))
     return store, uid, aid
 
@@ -145,10 +150,10 @@ def test_a_failed_objective_check_reverts_a_safe_bundle_even_if_the_critic_appro
 
 def test_captions_are_planned_by_default_and_left_off_with_a_reason_when_the_creator_has_their_own(env, monkeypatch):
     Scripted(monkeypatch)
-    analysis = {"niche": "Fashion", "parameters": [], "visionData": {"frames": [{"onScreenText": "hello"}] * 4}}
+    analysis = {"niche": "Fashion", "parameters": [], "visionData": {"frames": [{"onScreenText": f"hello {i}"} for i in range(4)]}}
     st, _, _ = run(env, analysis)
     cap = st["groups"]["captions"]
-    assert cap["status"] == "off" and "creator's own text" in " ".join(cap["reasons"])
+    assert cap["status"] == "off" and "creator's own captions" in " ".join(cap["reasons"])
     assert enabled_ids(st)["auto_captions"] is False            # still in the EDL: one click turns them on
     assert any(d["area"] == "captions" and "left off" in d["text"] for d in st["decisions"])
 

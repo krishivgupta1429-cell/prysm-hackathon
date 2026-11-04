@@ -8,7 +8,7 @@ import type { CSSProperties } from 'react'
 import { apiUrl } from '@/lib/api'
 import { getToken } from '@/lib/auth'
 
-type Change = { id: string; type: string; group: string; label: string; reason: string; target_parameter: string; enabled: boolean; verdict: string; verdict_reasons: string[]; user_override: boolean; risk?: string }
+type Change = { id: string; type: string; group: string; label: string; reason: string; target_parameter: string; enabled: boolean; verdict: string; verdict_reasons: string[]; user_override: boolean; risk?: string; finding?: string; effect_options?: string[] }
 type Group = { label: string; status: string; risk?: string; reasons: string[]; target: string; critic?: { verdict: string; reasons: string[]; defects: { flag: string; severity: string; detail?: string }[] } | null; metrics_after?: Metrics; objective?: { checks: { name: string; ok: boolean; detail: string; warn?: boolean }[]; ok: boolean } }
 type Metrics = { duration_s?: number; lufs?: number | null; true_peak_db?: number | null; silence_ratio?: number; cut_count?: number; avg_shot_s?: number; black_frames?: number; frozen_frames?: number }
 type Tip = { step_id?: string; parameter: string; tip: string; why_manual?: string }
@@ -18,6 +18,10 @@ type State = {
   baseline?: { metrics: Metrics } | null
   final?: { metrics: Metrics; overall_scores?: { before: Record<string, number>; after: Record<string, number>; notes?: string } | null; partial?: boolean; not_rescored?: boolean; objective_checks?: { group: string; name: string; ok: boolean; detail: string }[]; has_captions?: boolean } | null
   cost?: { total_usd: number }
+  packs?: Record<string, { label: string; headline: string; caption: string; accent: string; animation: string; for: string }>; intensities?: string[]
+  style?: { pack?: string | null; font_headline?: string | null; font_caption?: string | null; animation?: string | null; intensity?: string; sfx?: boolean }
+  style_choice?: { pack: string; pack_reason: string; fonts: { family: string; role: string; reason: string }[]; emphasis_count: number; notes: string[] } | null
+  style_notes?: string[]
   decisions?: { area: string; text: string }[]; critic?: { mode?: string; verdict?: string; notes?: string } | null
   timing?: { total_s?: number; stages?: Record<string, number> }
 }
@@ -49,6 +53,62 @@ function VideoBox({ title, path, version }: { title: string; path: string; versi
       <div style={{ background: '#0a0a0a', borderRadius: 12, aspectRatio: '9 / 16', overflow: 'hidden', maxHeight: 460 }}>
         {url ? <video src={url} controls playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : <div style={{ color: '#a3a3a3', fontSize: 12, padding: 16 }}>Loading…</div>}
       </div>
+    </div>
+  )
+}
+
+type FontRow = { family: string; category: string; devanagari: boolean }
+const CATS = ['all', 'display', 'sans', 'serif', 'rounded', 'handwriting', 'mono', 'devanagari']
+const GF_LINK = 'gf-preview-'
+
+function useFontPreview(families: string[]) {
+  // live preview: the browser loads each family from Google Fonts, limited to the letters of its own name so each request is tiny
+  useEffect(() => {
+    families.slice(0, 14).forEach(f => {
+      const id = GF_LINK + f.replace(/\W+/g, '-')
+      if (document.getElementById(id)) return
+      const l = document.createElement('link'); l.id = id; l.rel = 'stylesheet'
+      l.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(f).replace(/%20/g, '+')}&text=${encodeURIComponent(f + ' Aa Hello')}&display=swap`
+      document.head.appendChild(l)
+    })
+  }, [families])
+}
+
+function FontPicker({ label, value, onPick, busy, auth: authFn }: { label: string; value?: string | null; onPick: (family: string) => void; busy: boolean; auth: () => Record<string, string> }) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const [cat, setCat] = useState('all')
+  const [rows, setRows] = useState<FontRow[]>([])
+  useEffect(() => {
+    if (!open) return
+    const h = window.setTimeout(() => {
+      const u = `/prysm/auto-edit/fonts?q=${encodeURIComponent(q)}${cat !== 'all' ? `&category=${cat}` : ''}`
+      fetch(apiUrl(u), { headers: authFn() }).then(r => (r.ok ? r.json() : { fonts: [] })).then(j => setRows(j.fonts || [])).catch(() => {})
+    }, 200)
+    return () => window.clearTimeout(h)
+  }, [open, q, cat, authFn])
+  useFontPreview(open ? rows.map(r => r.family) : value ? [value] : [])
+  return (
+    <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+      <div style={{ ...muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', fontSize: 10, marginBottom: 4 }}>{label}</div>
+      <button style={{ ...btn2, width: '100%', textAlign: 'left', fontFamily: value ? `'${value}', sans-serif` : undefined, fontSize: 15 }} onClick={() => setOpen(o => !o)} aria-expanded={open} aria-label={`${label} font: ${value || 'default'}`}>{value || 'Poppins'} <span style={{ ...muted, float: 'right' }}>{open ? '▲' : '▼'}</span></button>
+      {open && (
+        <div style={{ border: '1px solid #e5e5e5', borderRadius: 12, padding: 10, marginTop: 6, background: '#fff' }}>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search Google Fonts" aria-label="Search fonts" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #d4d4d4', borderRadius: 999, padding: '8px 14px', fontSize: 13 }} />
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
+            {CATS.map(c => <button key={c} onClick={() => setCat(c)} style={{ ...tag, cursor: 'pointer', background: c === cat ? '#0a0a0a' : '#fff', color: c === cat ? '#fff' : '#737373' }}>{c}</button>)}
+          </div>
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0, maxHeight: 260, overflowY: 'auto' }}>
+            {rows.map(r => (
+              <li key={r.family}><button disabled={busy} onClick={() => { onPick(r.family); setOpen(false) }} style={{ all: 'unset', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', gap: 8, width: '100%', padding: '7px 4px', borderTop: '1px solid #f0f0f0', boxSizing: 'border-box' }}>
+                <span style={{ fontFamily: `'${r.family}', sans-serif`, fontSize: 17 }}>{r.family}</span>
+                <span style={{ ...muted, fontSize: 10, whiteSpace: 'nowrap' }}>{r.category}{r.devanagari ? ' · हिन्दी' : ''}</span>
+              </button></li>
+            ))}
+            {rows.length === 0 && <li style={muted}>No fonts found.</li>}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }
@@ -175,6 +235,8 @@ export default function AutoEdit({ analysisId }: { analysisId?: string }) {
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, wordBreak: 'break-word' }}>{c.label}</div>
                 <div style={muted}>{c.reason}{c.target_parameter ? ` · ${c.target_parameter}` : ''}</div>
+                {c.finding ? <div style={muted}>Answers: {c.finding}</div> : null}
+                {(c.effect_options || []).length > 1 && <select value={(c.label.match(/\((\w+),/) || [])[1] || ''} disabled={busy || st.running} onChange={e => call('POST', '/swap', { op_id: c.id, effect: e.target.value })} aria-label="Swap sound effect" style={{ ...btn2, padding: '3px 10px', fontSize: 11, marginTop: 4 }}>{(c.effect_options || []).map(o => <option key={o} value={o}>{o}</option>)}</select>}
                 {!c.enabled && c.verdict !== 'pending' && <div style={{ ...muted, fontStyle: 'italic' }}>Off. Tick the box to turn it on; it is rendered and checked again.</div>}
                 <div style={{ ...muted, marginTop: 2 }}>
                   <span style={{ ...tag, color: c.verdict === 'kept' ? '#0a0a0a' : '#737373', borderColor: c.verdict === 'kept' ? '#0a0a0a' : '#d4d4d4' }}>{c.verdict === 'kept' ? 'kept' : c.verdict === 'reverted' ? 'reverted' : c.verdict === 'off' ? 'off by default' : c.verdict}</span>
@@ -186,6 +248,32 @@ export default function AutoEdit({ analysisId }: { analysisId?: string }) {
             </li>
           ))}
         </ul>
+
+        <h3 style={h3}>Style pack, fonts and sound</h3>
+        {st.packs && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }} data-testid="style-packs">
+          {Object.entries(st.packs).map(([k, p]) => (
+            <button key={k} disabled={busy || st.running} onClick={() => call('POST', '/style', { pack: k })} style={{ ...(st.style?.pack === k ? btn : btn2), textAlign: 'left', padding: '8px 14px' }} title={p.for}>
+              <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 9, background: `#${p.accent}`, border: '1px solid #d4d4d4', marginRight: 6 }} />{p.label}
+              <div style={{ fontSize: 10, opacity: 0.7, fontWeight: 400 }}>{p.headline} + {p.caption}</div>
+            </button>
+          ))}
+        </div>}
+        {st.style_choice && <p style={{ ...muted, margin: '0 0 8px' }}>Suggested for this video: <b>{st.packs?.[st.style_choice.pack]?.label || st.style_choice.pack}</b>{st.style_choice.pack_reason ? ` (${st.style_choice.pack_reason})` : ''}. {st.style_choice.emphasis_count} words are emphasised.</p>}
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+          <FontPicker label="Headline font" value={st.style?.font_headline} busy={busy || st.running} auth={auth} onPick={f => call('POST', '/style', { font_headline: f })} />
+          <FontPicker label="Caption font" value={st.style?.font_caption} busy={busy || st.running} auth={auth} onPick={f => call('POST', '/style', { font_caption: f })} />
+        </div>
+        {(st.style_choice?.fonts || []).length > 0 && <div style={{ marginBottom: 8 }}>
+          <div style={{ ...muted, fontWeight: 600, marginBottom: 4 }}>Suggested fonts (one click):</div>
+          {st.style_choice!.fonts.map((f, i) => <button key={i} disabled={busy || st.running} onClick={() => call('POST', '/style', f.role === 'headline' ? { font_headline: f.family } : { font_caption: f.family })} style={{ ...btn2, padding: '6px 12px', fontSize: 12, marginRight: 6, marginBottom: 6 }} title={f.reason}>{f.role}: {f.family}</button>)}
+        </div>}
+        {(st.style_notes || []).map((n, i) => <p key={i} style={{ ...muted, color: '#b45309', margin: '0 0 6px' }}>{n}</p>)}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }} data-testid="intensity">
+          <span style={{ ...muted, fontWeight: 600 }}>Effects:</span>
+          {(st.intensities || []).map(k => <button key={k} disabled={busy || st.running} onClick={() => call('POST', '/style', { intensity: k })} style={{ ...(st.style?.intensity === k ? btn : btn2), padding: '6px 14px', fontSize: 12 }}>{k[0].toUpperCase() + k.slice(1)}</button>)}
+          <label style={{ ...muted, display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8 }}><input type="checkbox" checked={st.style?.sfx !== false} disabled={busy || st.running} onChange={e => call('POST', '/style', { sfx: e.target.checked })} style={{ width: 16, height: 16, accentColor: '#0a0a0a' }} />Sound effects</label>
+        </div>
+        <p style={{ ...muted, margin: '0 0 6px' }}>Sound effects are synthesised, mixed far under your voice and never replace your audio. No background music is added.</p>
 
         <h3 style={h3}>Style and requests</h3>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>

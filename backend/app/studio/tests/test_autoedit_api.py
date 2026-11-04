@@ -160,6 +160,53 @@ def test_toggle_flips_one_change_and_starts_a_rerender(ctx):
     assert ctx.client.post(f"/prysm/auto-edit/{ctx.aid}/toggle", json={"op_id": "zzz", "enabled": True}).status_code in (404, 409)
 
 
+def test_the_font_picker_searches_the_catalogue_by_name_and_category(ctx):
+    r = ctx.client.get("/prysm/auto-edit/fonts", params={"q": "baloo", "category": "devanagari"}).json()
+    assert "devanagari" in r["categories"] and r["fonts"] and all(f["devanagari"] and "baloo" in f["family"].lower() for f in r["fonts"])
+    assert ctx.client.get("/prysm/auto-edit/fonts", params={"category": "nope"}).status_code == 400
+
+
+def test_the_style_endpoint_changes_pack_fonts_intensity_and_sfx_then_rerenders(ctx):
+    finished_state(ctx)
+    base = f"/prysm/auto-edit/{ctx.aid}/style"
+    r = ctx.client.post(base, json={"pack": "fitness", "intensity": "punchy", "sfx": False})
+    assert r.status_code == 200 and len(ctx.spawned) == 1
+    body = r.json()
+    assert body["style"] == {"pack": "fitness", "font_headline": "Bebas Neue", "font_caption": "Oswald", "animation": "slide", "intensity": "punchy", "sfx": False}
+    assert "fitness" in body["packs"] and body["intensities"] == ["subtle", "balanced", "punchy"]
+    ctx.redis.kv.clear()
+    api._LIVE.clear()
+    st = json.loads(ctx.store.get_bytes(O.state_key(ctx.aid)))
+    st["status"] = "done"
+    ctx.store.put_bytes(O.state_key(ctx.aid), json.dumps(st).encode())
+    assert ctx.client.post(base, json={"font_caption": "Not A Font"}).status_code == 400
+    assert ctx.client.post(base, json={"pack": "nope"}).status_code == 400
+    assert ctx.client.post(base, json={"intensity": "max"}).status_code == 400
+
+
+def test_a_sound_accent_can_be_swapped_for_another_effect_that_suits_its_moment(ctx):
+    st = finished_state(ctx)
+    st["edl"]["ops"].append({"id": "fx1", "type": "sfx_hit", "group": "sound", "enabled": True, "reason": "", "finding": "sag", "target_parameter": "", "source_step_id": None,
+                             "params": {"at": 4.0, "kind": "funny", "effect": "scratch"}})
+    ctx.store.put_bytes(O.state_key(ctx.aid), json.dumps(st).encode())
+    base = f"/prysm/auto-edit/{ctx.aid}/swap"
+    assert ctx.client.post(base, json={"op_id": "fx1", "effect": "ring"}).status_code == 400
+    r = ctx.client.post(base, json={"op_id": "fx1", "effect": "womp"})
+    assert r.status_code == 200 and len(ctx.spawned) == 1
+    c = next(c for c in r.json()["changes"] if c["id"] == "fx1")
+    assert "womp" in c["label"] and c["effect_options"] == ["scratch", "womp", "boing", "toot"] and c["finding"] == "sag"
+    assert ctx.client.post(base, json={"op_id": "o1", "effect": "womp"}).status_code in (404, 409)
+
+
+def test_a_preset_change_keeps_the_pack_and_the_creators_font_choices(ctx):
+    st = finished_state(ctx)
+    st["style_overrides"] = {"pack": "comedy", "font_caption": "Lora", "caption_size": 99}
+    ctx.store.put_bytes(O.state_key(ctx.aid), json.dumps(st).encode())
+    r = ctx.client.post(f"/prysm/auto-edit/{ctx.aid}/preset", json={"preset": "energetic"})
+    assert r.status_code == 200 and r.json()["style"]["pack"] == "comedy" and r.json()["style"]["font_caption"] == "Lora"
+    assert "caption_size" not in r.json()["style_overrides"]           # size tweaks are per-preset and reset
+
+
 def test_revision_is_applied_and_the_sixth_is_refused(ctx):
     finished_state(ctx)
     r = ctx.client.post(f"/prysm/auto-edit/{ctx.aid}/revise", json={"text": "bigger captions"})

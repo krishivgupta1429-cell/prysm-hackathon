@@ -79,7 +79,8 @@ Every baseline file changed, and why. Everything except the model call sites is 
 | `web/src/pages/Results.tsx` | Free-plan locking off in demo mode; step parser splits at `Step N —` markers first; Models used panel; the cost panel (rendered only with `VITE_SHOW_COST_PANEL=1` or for the founder); the Predicted Viewer Behaviour card for the new sources (`ViewerBehaviourCard`) next to the untouched RunPod card, and the `engagementPrediction` type widened (`available`, `reason`, `qalign`, nullable numbers). |
 | `web/src/pages/Results.tsx` (Auto-edit) | One line mounts `<AutoEdit>` for upload analyses; it renders nothing unless the backend flag is on. |
 | `web/src/studio/CostPanel.tsx` | Adds the Auto-edit cost rows (founder / local flag only). |
-| `.gitignore`, `backend/requirements-studio.txt` | `backend/data/` ignored; adds boto3, scipy, soundfile, opencv-python-headless, imageio-ffmpeg, json-repair for Auto-edit. |
+| `.gitignore`, `backend/requirements-studio.txt` | `backend/data/` ignored; adds boto3, scipy, soundfile, opencv-python-headless, imageio-ffmpeg, json-repair, fonttools (Google Fonts download / glyph coverage), librosa already present, for Auto-edit. |
+| `backend/app/studio/meta_client.py` | `MetaClient.whisper(wav, prompt=None)`: one optional argument so Auto-edit can prime the recogniser with filler words; default behaviour unchanged. |
 
 New files outside `backend/app/studio/`: `backend/.dockerignore`, `backend/pytest.ini`, `backend/requirements-studio.txt`, `web/.env.example`, `web/scripts/set_backend_url.sh`, `web/src/lib/config.ts`, `web/src/studio/progress.ts`, `web/src/studio/CostPanel.tsx`, `scripts/style_stats.py`, `scripts/rescore.py`, `scripts/bakeoff.py`, `scripts/meta_cost_check.md`, `docs/model-swap.md`, `docs/swap-check.md`, `docs/style-stats.md`, `docs/swap-defects.md`, `docs/bakeoff*.md`, `README.md`, `DEPLOY.md`, this file.
 
