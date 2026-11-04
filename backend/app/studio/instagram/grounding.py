@@ -44,13 +44,14 @@ class Facts:
     wt: Optional[float]
     pi: Optional[float]
     level: str            # full | thumbnail_caption | caption_only
+    hook: str = ""        # normalised first spoken words (transcript of the first ~12 s); "" = unknown
 
 
 def facts_from(reels: Iterable[dict]) -> dict[int, Facts]:
     out: dict[int, Facts] = {}
     for r in reels:
         out[int(r["n"])] = Facts(int(r["n"]), norm(r.get("caption")), r.get("fingerprint") or {}, r.get("watch_through"),
-                                 r.get("performance_index"), r.get("analysis_level") or "full")
+                                 r.get("performance_index"), r.get("analysis_level") or "full", norm(r.get("hook_words")))
     return out
 
 
@@ -99,7 +100,7 @@ def _allowed_numbers(cited: list[Facts], total: int) -> set[str]:
             ok |= {f"{f.pi:.2f}", f"{f.pi:.1f}", str(round(f.pi, 1)), f"{f.pi:.0f}"}
         if f.wt is not None:
             ok |= {str(int(round(f.wt * 100))), f"{f.wt * 100:.1f}"}
-        ok |= set(re.findall(r"\d+(?:\.\d+)?", f.caption))
+        ok |= set(re.findall(r"\d+(?:\.\d+)?", f.caption + " " + f.hook))
     return ok
 
 
@@ -112,7 +113,7 @@ def problems(text: str, cited: list[int], facts: dict[int, Facts]) -> list[str]:
     cf = [facts[n] for n in cited if n in facts]
     if not cf:
         return out or ["cites no reel"]
-    captions = " | ".join(f.caption for f in cf)
+    captions = " | ".join(x for f in cf for x in (f.caption, f.hook) if x)   # words that are really there: caption + first spoken words
     topics = " | ".join(norm(str(f.fp.get("topic") or "")) for f in cf)
     raw = REEL_REF.sub(" ", text)
 
@@ -121,25 +122,25 @@ def problems(text: str, cited: list[int], facts: dict[int, Facts]) -> list[str]:
         for m in rx.finditer(raw):
             q = norm(m.group(1))
             if len(q) >= 3 and q not in captions and q not in topics:
-                out.append(f"quotes \"{m.group(1)[:40]}\", which is not in the cited reels' captions")
+                out.append(f"quotes \"{m.group(1)[:40]}\", which is not in the cited reels' captions or first spoken words")
     # 2. hashtags, @names, links
     for m in list(_HASHTAG.finditer(raw)) + list(_URL.finditer(raw)):
         if norm(m.group(0)) not in captions:
-            out.append(f"mentions {m.group(0)[:30]}, which is not in the cited reels' captions")
+            out.append(f"mentions {m.group(0)[:30]}, which is not in the cited reels' captions or first spoken words")
     # 3. greetings / sign-offs / catchphrases
     for m in _GREET_CONCRETE.finditer(raw):
         if norm(m.group(0)) not in captions:
-            out.append(f"mentions the greeting \"{m.group(0)}\", which is not in the cited reels' captions")
+            out.append(f"mentions the greeting \"{m.group(0)}\", which is not in the cited reels' captions or first spoken words")
     if _GREET_ABSTRACT.search(raw) and not _GREET_CONCRETE.search(captions):
         out.append("describes a greeting, but no cited caption has one")
     for m in _CTA_CONCRETE.finditer(raw):
         if norm(m.group(0)) not in captions:
-            out.append(f"mentions \"{m.group(0)}\", which is not in the cited reels' captions")
+            out.append(f"mentions \"{m.group(0)}\", which is not in the cited reels' captions or first spoken words")
     if _CTA_ABSTRACT.search(raw) and not _CAPTION_CTA.search(captions):
         out.append("describes a sign-off or call to action, but no cited caption has one")
     # 4. speech and music: the fingerprint's audio type is the only evidence besides the caption
     if _SPEECH.search(raw) and not any(f.fp.get("audio_type") in SPEECH_AUDIO for f in cf) \
-            and not any(m.group(0).lower() in captions for m in _SPEECH.finditer(raw)):
+            and not any(f.hook for f in cf) and not any(m.group(0).lower() in captions for m in _SPEECH.finditer(raw)):
         out.append("says what is spoken, but nothing shows speech in the cited reels (audio is unknown)")
     if _MUSIC.search(raw) and not any(f.fp.get("audio_type") in MUSIC_AUDIO for f in cf) \
             and not any(m.group(0).lower() in captions for m in _MUSIC.finditer(raw)):

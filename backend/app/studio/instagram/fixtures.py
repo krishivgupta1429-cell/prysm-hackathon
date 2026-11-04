@@ -150,6 +150,14 @@ class FixtureSource:
     async def profile_picture(self) -> Optional[str]:
         return None
 
+    def fixture_hook_words(self, raw: dict):
+        """Deterministic fake first words for the fixture (its videos are silent): the talking reels 'say' their on-screen hook line."""
+        from app.studio.instagram.hook import HookResult
+        arch, hook_line = _REELS[int(raw["_fixture_index"])][:2]
+        if arch in ("talk_q", "list") and hook_line:
+            return HookResult("transcribed", f"{hook_line}", 0.0, 0.0)
+        return HookResult("no_speech")
+
     async def count_reels(self, stop_at: int = 30) -> tuple[int, bool]:
         return N_FIXTURE, True
 

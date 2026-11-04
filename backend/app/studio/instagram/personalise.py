@@ -59,6 +59,7 @@ async def load(db, user_id) -> Optional[dict]:
               "caption": r.caption, "duration_s": r.duration_s, "performance_index": r.performance_index,
               "performance_basis": r.performance_basis, "watch_through": r.watch_through, "fingerprint": r.fingerprint,
               "frames_used": r.frames_used, "note": r.note, "like_count": r.like_count, "comments_count": r.comments_count,
+              "hook_words": r.hook_words, "hook_words_status": r.hook_words_status,
               "thumbnail_url": r.thumbnail_url, "insights": {m: ins.get(r.id, {}).get(m) for m in M.METRICS},
               "vs_usual": M.plain_vs_usual(r.performance_index, r.performance_basis),
               "analysis_level": level_of(r), "partial": level_of(r) != "full", "partial_reason": PARTIAL_REASON.get(level_of(r))}
@@ -116,6 +117,10 @@ def _fact_lines(data: dict) -> list[str]:
             bits.append(f"index {r['performance_index']:.2f}")
         if r.get("watch_through") is not None:
             bits.append(f"watch-through {r['watch_through']:.0%}")
+        if r.get("vs_usual"):
+            bits.append(r["vs_usual"]["label"].lower())
+        if r.get("hook_words"):
+            bits.append(f"first spoken words \"{r['hook_words'][:120]}\"")
         out.append(f"Reel {n}: " + ", ".join(bits) + ".")
     if out:
         out.insert(0, "The ONLY known facts about those reels (anything else, such as what was said, the music or exact words, is unknown):")
@@ -195,7 +200,8 @@ def _rewrite_prompt(bad: list[dict], data: dict) -> str:
         what = ("read from thumbnail and caption only (hook, format, pacing, watch-through unknown)" if r["partial"] else
                 f"hook {fp.get('hook_type')}, format {fp.get('format')}, pacing {fp.get('pacing')}")
         extra = (f", index {r['performance_index']:.2f}" if r.get("performance_index") is not None else "") + \
-                (f", watch-through {r['watch_through']:.0%}" if r.get("watch_through") is not None else "")
+                (f", watch-through {r['watch_through']:.0%}" if r.get("watch_through") is not None else "") + \
+                (f", first spoken words \"{r['hook_words'][:120]}\"" if r.get("hook_words") else "")
         rows.append(f"Reel {r['n']}: {what}{extra}; caption: \"{(r.get('caption') or '')[:100]}\"")
     items = "\n".join(f"{i}. \"{b['sentence']}\"  (problem: {'; '.join(b['problems'])})" for i, b in enumerate(bad))
     return ("A coaching answer mentions a creator's own reels. These are the ONLY facts known about those reels:\n" + "\n".join(rows) +

@@ -51,6 +51,8 @@ class IgReel(Base):
     like_count = Column(Integer)
     comments_count = Column(Integer)
     analysis_level = Column(String(20))               # full (video frames) | thumbnail_caption | caption_only (no video link from Instagram)
+    hook_words = Column(Text)                         # the first ~12 s of speech as text (never audio); NULL = unknown
+    hook_words_status = Column(String(16))            # transcribed | no_speech | unknown
     frames_used = Column(Integer, default=0)          # frames sent to the model for the fingerprint (0 = caption only)
     performance_index = Column(Float)                 # reach (else views) / account median across the imported reels
     performance_basis = Column(String(20))            # "reach" or "views"

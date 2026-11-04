@@ -608,3 +608,153 @@ def test_real_skip_rate_is_a_percent_and_the_fixture_matches():
     from app.studio.instagram import fixtures
     vals = [fixtures._insights(i)["reels_skip_rate"] for i in range(1, 12)]
     assert all(5 <= v <= 80 for v in vals)                          # percent like Instagram's 59.1, not a 0..1 fraction
+
+
+# =================================================================== phase 3: hook words
+
+class FakeVoice:
+    """Stands in for MetaClient: only .transcribe(wav)."""
+    def __init__(self, transcript="Stop scrolling. Here is why your reels flop", ms=12000, cost=0.0006, boom=False):
+        self.transcript, self.ms, self.cost, self.boom, self.calls = transcript, ms, cost, boom, 0
+
+    def transcribe(self, wav):
+        self.calls += 1
+        if self.boom:
+            raise RuntimeError("network down")
+        return type("V", (), {"transcript": self.transcript, "audio_duration_ms": self.ms, "cost_usd": self.cost})()
+
+
+@aio
+async def test_transcribe_hook_cuts_the_first_12_seconds_and_returns_the_words(tmp_path, monkeypatch):
+    from app.studio.instagram import hook as H
+    cut = []
+
+    async def fake_cut(video, wav, seconds=H.HOOK_SECONDS):
+        cut.append(seconds)
+        Path(wav).write_bytes(b"x" * 2000)
+        return True
+    monkeypatch.setattr(H, "cut_audio", fake_cut)
+    voice = FakeVoice()
+    r = await H.transcribe_hook("reel.mp4", str(tmp_path), client=voice)
+    assert cut == [12] and voice.calls == 1
+    assert (r.status, r.text, r.cost_usd) == ("transcribed", "Stop scrolling. Here is why your reels flop", 0.0006)
+    assert (await H.transcribe_hook("reel.mp4", str(tmp_path), client=FakeVoice(transcript="  ", cost=0.0006))).status == "no_speech"
+    assert (await H.transcribe_hook("reel.mp4", str(tmp_path), client=FakeVoice(boom=True))).status == "unknown"      # never raises
+
+
+@aio
+async def test_a_video_without_an_audio_track_is_no_speech_and_makes_no_call(tmp_path, monkeypatch):
+    from app.studio.instagram import hook as H
+
+    async def no_audio(video, wav, seconds=12):
+        return False
+    monkeypatch.setattr(H, "cut_audio", no_audio)
+    voice = FakeVoice()
+    assert (await H.transcribe_hook("reel.mp4", str(tmp_path), client=voice)).status == "no_speech" and voice.calls == 0
+
+
+from pathlib import Path   # noqa: E402  (used above)
+
+
+@aio
+async def test_import_stores_hook_words_adds_them_to_the_fingerprint_and_leaves_videoless_reels_unknown(monkeypatch):
+    from app.studio.instagram import hook as H
+    seen = {"prompts": []}
+
+    async def fake_ask(content, max_tokens, spend, *, system=None):
+        spend.add(0.002)
+        seen["prompts"].append(content[-1]["text"])
+        return json.dumps({"hook_type": "question", "format": "talking_head", "pacing": "fast", "audio_type": "music_only", "on_screen_text": True, "topic": "t"})
+    monkeypatch.setattr(D, "_ask", fake_ask)
+
+    async def fake_transcribe(video, tmp, client=None):
+        return H.HookResult("transcribed", "Stop scrolling right now", 0.0006, 12.0)
+    monkeypatch.setattr(H, "transcribe_hook", fake_transcribe)
+
+    class VideoSource(FakeSource):
+        async def download(self, raw, dest):
+            if int(raw["id"][1:]) % 2:
+                return False                                              # odd reels: no video link
+            import subprocess
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=2", dest], check=True)
+            return True
+
+        async def thumbnail(self, raw):
+            return b"\xff\xd8jpeg"
+    async with dbf() as factory:
+        uid = await make_user(factory)
+        redis = Redis()
+        async with factory() as db:
+            await oauth.save_connection(db, uid, token="tok", ig_user_id="ig1", username="me", account_type="BUSINESS", expires_in=3600, scopes="a", is_fixture=True)
+        summary = await importer.run_import(redis=redis, session_factory=factory, user_id=uid, count=4, job_id="jh", source=VideoSource(4))
+        assert summary["status"] == "done" and summary["hook_words_read"] == 2 and summary["transcribed_reels"] == 2
+        assert summary["transcribe_usd"] == pytest.approx(0.0012)
+        async with factory() as db:
+            acct = (await db.execute(select(IgAccount).where(IgAccount.user_id == uid))).scalar_one()
+            rows = {r.media_id: r for r in (await db.execute(select(IgReel).where(IgReel.account_id == acct.id))).scalars()}
+            for k in ("m0", "m2"):
+                assert rows[k].hook_words == "Stop scrolling right now" and rows[k].hook_words_status == "transcribed"
+                assert rows[k].fingerprint["hook_words"] == "Stop scrolling right now" and rows[k].fingerprint["audio_type"] == "speech"
+            for k in ("m1", "m3"):
+                assert rows[k].hook_words is None and rows[k].hook_words_status == "unknown" and rows[k].fingerprint["hook_words"] is None
+    assert any("Stop scrolling right now" in p for p in seen["prompts"])           # the model sees the real words
+
+
+@aio
+async def test_import_does_not_transcribe_once_the_cost_cap_is_reached(monkeypatch):
+    from app.studio.instagram import hook as H
+    calls = []
+
+    async def fake_transcribe(video, tmp, client=None):
+        calls.append(1)
+        return H.HookResult("transcribed", "words words", 0.0006, 12.0)
+    monkeypatch.setattr(H, "transcribe_hook", fake_transcribe)
+    monkeypatch.setenv("DNA_COST_CAP_USD", "0")
+
+    async def fake_ask(content, max_tokens, spend, *, system=None):
+        spend.add(0.01)
+        return "{}"
+    monkeypatch.setattr(D, "_ask", fake_ask)
+
+    class VideoSource(FakeSource):
+        async def download(self, raw, dest):
+            import subprocess
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=1", dest], check=True)
+            return True
+    async with dbf() as factory:
+        uid = await make_user(factory)
+        async with factory() as db:
+            await oauth.save_connection(db, uid, token="tok", ig_user_id="ig1", username="me", account_type="BUSINESS", expires_in=3600, scopes="a", is_fixture=True)
+        # a cost cap of 0 is already reached before the first reel is read: nothing is sent to Voice Transcribe
+        await importer.run_import(redis=Redis(), session_factory=factory, user_id=uid, count=2, job_id="jc", source=VideoSource(2))
+    assert calls == []
+
+
+def test_grounding_allows_quotes_and_speech_claims_that_match_the_hook_words_and_rejects_the_rest():
+    f = G.facts_from([mk(1, caption="plain", fingerprint=fp(audio="unknown")) | {"hook_words": "Hey guys, stop scrolling right now"},
+                      mk(2, caption="plain", fingerprint=fp(audio="unknown")) | {"hook_words": None}])
+    assert not G.problems('Reel 1 opens with "stop scrolling right now"', [1], f)               # really said
+    assert not G.problems("Reel 1 starts with a hey guys greeting", [1], f)                    # greeting is in the hook words
+    assert not G.problems("In Reel 1 the creator says to stop scrolling", [1], f)              # speech is evidenced by the words
+    assert G.problems('Reel 1 opens with "welcome back to my channel"', [1], f)                # not said
+    assert G.problems('Reel 2 opens with "stop scrolling right now"', [2], f)                  # reel 2 has no hook words
+    assert G.problems("In Reel 2 the creator says to stop scrolling", [2], f)                  # unknown stays unsupported
+
+
+def test_the_synthesis_rows_and_the_addendum_carry_the_real_hook_words_or_say_unknown():
+    prep = prep_of([mk(n) | {"hook_words": "Stop scrolling" if n == 1 else None} for n in range(1, 6)])
+    p = D._synth_prompt(prep)
+    assert 'first spoken words: "Stop scrolling"' in p and "first spoken words: unknown" in p
+    data = data_for([mk(1) | {"hook_words": "Stop scrolling", "vs_usual": {"label": "Reach 25% above your usual"}}, mk(2)])
+    data["dna"].sample_size = 2
+    data["dna"].dna = {"top": [1], "bottom": [2], "mode": "full"}
+    t = personalise.addendum(data)
+    assert 'first spoken words "Stop scrolling"' in t and "reach 25% above your usual" in t
+
+
+def test_the_fixture_has_deterministic_fake_hook_words_for_talking_reels_only():
+    from app.studio.instagram import fixtures
+    src = fixtures.FixtureSource()
+    talk = src.fixture_hook_words({"_fixture_index": 1})
+    assert talk.status == "transcribed" and talk.text and talk.cost_usd == 0.0
+    assert src.fixture_hook_words({"_fixture_index": 0}).status == "no_speech"                 # b-roll: nothing spoken

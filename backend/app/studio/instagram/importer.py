@@ -17,6 +17,7 @@ from sqlalchemy import delete, select
 
 from app.studio.instagram import dna as D
 from app.studio.instagram import frames as F
+from app.studio.instagram import hook as H
 from app.studio.instagram import metrics as M
 from app.studio.instagram.graph import RateLimited, TokenInvalid
 from app.studio.instagram.models import CreatorDna, IgAccount, IgReel, IgReelInsight
@@ -90,6 +91,7 @@ async def _one_reel(src, raw: dict, idx: int, spend: D.Spend, sem: asyncio.Semap
             "posted_at": _parse_ts(raw.get("timestamp")), "like_count": raw.get("like_count"),
             "comments_count": raw.get("comments_count"), "duration_s": None, "frames_used": 0, "fingerprint": None,
             "note": None, "insights": {m: None for m in M.METRICS}, "analysis_level": "full",
+            "hook_words": None, "hook_words_status": "unknown",
         }
         notes = []
         try:
@@ -100,8 +102,19 @@ async def _one_reel(src, raw: dict, idx: int, spend: D.Spend, sem: asyncio.Semap
             rec["insights"] = await src.insights(raw["id"])
             if all(v is None for v in rec["insights"].values()):
                 notes.append("Instagram returned no insights for this reel (data can lag up to 48 hours).")
-            jpegs, dur = await F.frames_from_download(lambda p: src.download(raw, p))
+            async def hook_step(video, tmp):
+                # the first ~12 s of speech as text (Voice Transcribe, the pipeline's own client); the audio is cut inside the temp folder
+                if hasattr(src, "fixture_hook_words"):
+                    return src.fixture_hook_words(raw)
+                if spend.usd >= spend.cap:
+                    return H.HookResult("unknown")
+                return await H.transcribe_hook(video, tmp)
+            jpegs, dur, hook = await F.read_reel(lambda p: src.download(raw, p), on_video=hook_step)
             rec["duration_s"] = dur
+            if hook is not None:
+                rec["hook_words"], rec["hook_words_status"] = hook.text, hook.status
+                if hook.audio_seconds or hook.cost_usd:
+                    spend.add_transcribe(hook.cost_usd)
             if not jpegs:
                 # no video file from Instagram (licensed audio, removed media, download failed): say so on the reel, never "fully analysed"
                 thumb = await src.thumbnail(raw)
@@ -118,7 +131,7 @@ async def _one_reel(src, raw: dict, idx: int, spend: D.Spend, sem: asyncio.Semap
             rec["frames_used"] = len(jpegs)
             if spend.room_for_fingerprint():
                 rec["fingerprint"] = await D.fingerprint_reel([F.to_image_block(j) for j in jpegs], raw.get("caption"), spend,
-                                                              rec["analysis_level"])
+                                                              rec["analysis_level"], rec["hook_words"])
                 if rec["fingerprint"] is None:
                     notes.append("The fingerprint call did not return a usable answer.")
             else:
@@ -177,7 +190,7 @@ async def run_import(*, redis, session_factory, user_id: str, count: int, job_id
         progress("creator_dna", "running")
         reel_dicts = [{"performance_index": r.get("performance_index"), "watch_through": r.get("watch_through"),
                        "fingerprint": r.get("fingerprint"), "caption": r.get("caption"),
-                       "analysis_level": r.get("analysis_level"), "media_id": r.get("media_id"),
+                       "analysis_level": r.get("analysis_level"), "media_id": r.get("media_id"), "hook_words": r.get("hook_words"),
                        "posted_at": (r["posted_at"].isoformat() if r.get("posted_at") else ""), "_rec": r} for r in recs]
         built = await D.build_dna(reel_dicts, agg["basis"], agg["missing"], spend) if recs else None
         progress("creator_dna", "ok" if built else "skipped")
@@ -195,7 +208,8 @@ async def run_import(*, redis, session_factory, user_id: str, count: int, job_id
         summary = {"status": "done", "imported": len(recs), "requested": count, "missing_metrics": agg["missing"],
                    "partial": sum(1 for r in recs if r.get("analysis_level") != "full"),
                    "rate_limited": bool(state.get("rate_limited")), "token_invalid": bool(state.get("token_invalid")),
-                   "cost_usd": spend.usd, "model_calls": spend.calls}
+                   "cost_usd": spend.usd, "model_calls": spend.calls, "hook_words_read": sum(1 for r in recs if r.get("hook_words_status") == "transcribed"),
+                   "transcribed_reels": spend.transcribed, "transcribe_usd": spend.transcribe_usd}
         await _job_write(redis, job_id, **summary)
         return summary
     except TokenInvalid:
@@ -229,6 +243,7 @@ async def _replace_data(db, acct: IgAccount, recs: list[dict], built: dict | Non
         reel = IgReel(account_id=acct.id, media_id=r["media_id"], permalink=r["permalink"], thumbnail_url=r.get("thumbnail_url"), posted_at=r["posted_at"],
                       caption=r["caption"], duration_s=r["duration_s"], like_count=r["like_count"],
                       comments_count=r["comments_count"], frames_used=r["frames_used"], analysis_level=r.get("analysis_level"),
+                      hook_words=r.get("hook_words"), hook_words_status=r.get("hook_words_status"),
                       performance_index=r.get("performance_index"), performance_basis=r.get("performance_basis"),
                       watch_through=r.get("watch_through"), fingerprint=r["fingerprint"], note=r["note"])
         db.add(reel)

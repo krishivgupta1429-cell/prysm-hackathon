@@ -110,6 +110,9 @@ check('every reel card shows a thumbnail that loaded', (await page.$$eval('[data
 await page.evaluate(() => window.scrollTo(0, 0))
 check('metrics show real numbers and "no data yet" instead of 0', /Views/.test(reelsText) && /Saves/.test(reelsText) && /Avg watch time/.test(reelsText) && /no data yet/.test(reelsText) && !/Skip rate\s*0%/.test(reelsText))
 check('hook words line on every reel', (await page.$$('[data-testid=hook-words]')).length === 8)
+const hookTexts = await page.$$eval('[data-testid=hook-words]', els => els.map(e => e.textContent.replace(/\s+/g, ' ')))
+check('talking reels show their hook words in quotes; b-roll says no speech; the video-less reel says unknown (no video file)',
+  hookTexts.some(t => /Hook words: .Why do your reels flop/.test(t)) && hookTexts.some(t => /no speech in the first seconds/.test(t)) && hookTexts.some(t => /unknown \(no video file from Instagram\)/.test(t)), hookTexts.join(' | ').slice(0, 200))
 check('exactly one reel carries the thumbnail-only badge', (await page.$$('[data-testid=partial-badge]')).length === 1)
 const partialCard = await page.$('[data-testid=reel-row]:has([data-testid=partial-badge])')
 const partialText = (await partialCard.textContent()).replace(/\s+/g, ' ')

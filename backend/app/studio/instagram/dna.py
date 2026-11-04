@@ -51,10 +51,17 @@ class Spend:
         self.cap = cap
         self.usd = 0.0
         self.calls = 0
+        self.transcribe_usd = 0.0       # Voice Transcribe (hook words), included in usd
+        self.transcribed = 0            # reels whose first seconds were sent to Voice Transcribe
 
     def add(self, usd: float):
         self.usd = round(self.usd + (usd or 0.0), 6)
         self.calls += 1
+
+    def add_transcribe(self, usd: float):
+        self.usd = round(self.usd + (usd or 0.0), 6)
+        self.transcribe_usd = round(self.transcribe_usd + (usd or 0.0), 6)
+        self.transcribed += 1
 
     def room_for_fingerprint(self) -> bool:
         return self.usd < self.cap * (1 - SYNTH_RESERVE_FRACTION)
@@ -84,7 +91,7 @@ FP_SYSTEM = ("You label short-form videos for a creator-coaching tool. Answer wi
              "Use only what the frames and caption show. If you cannot tell, use \"unknown\" or \"other\"; never guess details.")
 
 
-def _fp_prompt(caption: str | None, n_frames: int, level: str = "full") -> str:
+def _fp_prompt(caption: str | None, n_frames: int, level: str = "full", hook_words: str | None = None) -> str:
     opts = "; ".join(f'"{k}": one of {list(v)}' for k, v in ALLOWED.items())
     if level != "full":   # no video from Instagram: one still image (or nothing) and the caption
         what = ("This single image is the thumbnail of one Instagram reel" if n_frames else "No image is available for one Instagram reel")
@@ -92,7 +99,8 @@ def _fp_prompt(caption: str | None, n_frames: int, level: str = "full") -> str:
                 f"Return JSON with exactly these keys: {opts}; \"on_screen_text\": true or false (is there written text on screen); "
                 "\"topic\": at most 6 words. You cannot judge the opening seconds, format, pacing or audio from one still image: for hook_type "
                 "and format answer \"other\", for pacing \"medium\", for audio_type \"unknown\".")
-    return (f"These {n_frames} frames are spread evenly over one Instagram reel. Caption: \"{(caption or '')[:300]}\".\n"
+    spoken = (f" The first seconds of audio were transcribed as: \"{hook_words[:240]}\"." if hook_words else "")
+    return (f"These {n_frames} frames are spread evenly over one Instagram reel. Caption: \"{(caption or '')[:300]}\".{spoken}\n"
             f"Return JSON with exactly these keys: {opts}; \"on_screen_text\": true or false (is there written text on screen); "
             "\"topic\": at most 6 words. hook_type is how the first seconds try to hold attention. "
             "audio_type cannot be seen: use \"unknown\" unless the frames or caption make it obvious (for example a person speaking to camera).")
@@ -116,14 +124,15 @@ def normalise_fingerprint(raw: dict | None) -> dict | None:
 def mark_partial(fp: dict | None, level: str) -> dict | None:
     """A reel read without its video: hook, format, pacing and audio are NOT judged (set to "unknown"), whatever the model answered."""
     if fp is not None and level != "full":
-        fp = {**fp, "hook_type": "unknown", "format": "unknown", "pacing": "unknown", "audio_type": "unknown"}
+        fp = {**fp, "hook_type": "unknown", "format": "unknown", "pacing": "unknown", "audio_type": "unknown", "hook_words": None}
     return fp
 
 
-async def fingerprint_reel(frames_b64_blocks: list[dict], caption: str | None, spend: Spend, level: str = "full") -> dict | None:
+async def fingerprint_reel(frames_b64_blocks: list[dict], caption: str | None, spend: Spend, level: str = "full",
+                           hook_words: str | None = None) -> dict | None:
     """One call on the frames plus the caption. None if the call or the parsing failed (the reel stays, without a fingerprint).
     level != "full" (no video link): thumbnail/caption only, so hook, format, pacing and audio come back "unknown"."""
-    content = list(frames_b64_blocks) + [{"type": "text", "text": _fp_prompt(caption, len(frames_b64_blocks), level)}]
+    content = list(frames_b64_blocks) + [{"type": "text", "text": _fp_prompt(caption, len(frames_b64_blocks), level, hook_words)}]
     if not frames_b64_blocks and level == "full":
         content = [{"type": "text", "text": _fp_prompt(caption, 0, "caption_only")}]
     try:
@@ -131,7 +140,12 @@ async def fingerprint_reel(frames_b64_blocks: list[dict], caption: str | None, s
     except Exception as e:  # network, rate limit, missing key: the import goes on without this fingerprint
         log.warning("[DNA] fingerprint call failed: %s", type(e).__name__)
         return None
-    return mark_partial(normalise_fingerprint(_parse(text)), level)
+    fp = mark_partial(normalise_fingerprint(_parse(text)), level)
+    if fp is not None and level == "full":
+        fp["hook_words"] = hook_words or None            # the real words, from the transcript (never the model's)
+        if hook_words and fp.get("audio_type") not in G.SPEECH_AUDIO:
+            fp["audio_type"] = "speech"                  # speech was heard
+    return fp
 
 
 async def fingerprint_text_only(summary_text: str, spend: Spend) -> dict | None:
@@ -227,8 +241,10 @@ def _synth_prompt(prep: dict, repair: str = "") -> str:
         wt = f"{r['watch_through']:.0%}" if r.get("watch_through") is not None else "unknown"
         pi = f"{r['performance_index']:.2f}" if r.get("performance_index") is not None else "unknown"
         tag = "" if (r.get("analysis_level") or "full") == "full" else " [THUMBNAIL+CAPTION ONLY: no video, so hook, format, pacing and audio are unknown]"
+        hw = r.get("hook_words")
+        hook = f"first spoken words: \"{hw[:140]}\"" if hw else "first spoken words: unknown"
         return (f"Reel {r['n']}: index {pi} (1.00 = typical for this account), watch-through {wt}; "
-                f"{_fp_line(r.get('fingerprint'))}; caption: \"{(r.get('caption') or '')[:120]}\"{tag}")
+                f"{_fp_line(r.get('fingerprint'))}; {hook}; caption: \"{(r.get('caption') or '')[:120]}\"{tag}")
     top_ids = {r["n"] for r in prep["top"]}
     bottom_ids = {r["n"] for r in prep["bottom"]}
     rows = "\n".join(("[TOP] " if r["n"] in top_ids else "[BOTTOM] " if r["n"] in bottom_ids else "[MIDDLE] ") + row(r) for r in prep["reels"])
@@ -243,8 +259,8 @@ def _synth_prompt(prep: dict, repair: str = "") -> str:
             '"weakest": [{"claim": "...", "reels": [N, ...]}]  (what repeats in the BOTTOM reels; 1-3 items)\n'
             '"keep": [{"claim": "habit to keep", "reels": [N, ...]}]  (1-2 items)\n'
             '"change": [{"claim": "habit to change", "reels": [N, ...]}]  (1-2 items)\n'
-            "Only claim what the rows above support, and cite at least one reel number in every item. Use ONLY facts that are in the rows: "
-            "no quoted words, greetings, catchphrases, hashtags, music or spoken lines that are not in a caption, and no numbers that are "
+            "Only claim what the rows above support, and cite at least one reel number in every item. Use ONLY facts that are in the rows (the first spoken words are real and may be quoted): "
+            "no other quoted words, greetings, catchphrases, hashtags, music or spoken lines that are not in a caption, and no numbers that are "
             "not in the rows. Do not base a claim about hooks, pacing or watch-through on a THUMBNAIL+CAPTION ONLY reel."
             + (("\n\n" + repair) if repair else ""))
 

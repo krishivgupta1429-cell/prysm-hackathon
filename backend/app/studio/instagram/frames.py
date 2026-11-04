@@ -48,18 +48,27 @@ async def extract_frames(path: str, out_dir: str, duration: Optional[float], n: 
     return frames
 
 
-async def frames_from_download(fetch: Callable[[str], Awaitable[bool]], n: int = N_FRAMES) -> tuple[list[bytes], Optional[float]]:
-    """fetch(dest_path) downloads the video. Returns (frames, duration_s); ([], None) when the download failed.
-    The temp folder, with the video and every frame file, is removed in all cases."""
+async def read_reel(fetch: Callable[[str], Awaitable[bool]], n: int = N_FRAMES, on_video: Optional[Callable] = None) -> tuple[list[bytes], Optional[float], object]:
+    """fetch(dest_path) downloads the video. Returns (frames, duration_s, extra); ([], None, None) when the download failed.
+    `on_video(video_path, tmp_dir)` (optional, async) runs while the video exists, e.g. to transcribe the first seconds; its result is
+    `extra`. The temp folder, with the video, the audio and every frame file, is removed in all cases."""
     tmp = tempfile.mkdtemp(prefix="ig_reel_")
     try:
         video = str(Path(tmp) / "reel.mp4")
         if not await fetch(video):
-            return [], None
+            return [], None, None
         duration = await probe_duration(video)
-        return await extract_frames(video, tmp, duration, n), duration
+        frames = await extract_frames(video, tmp, duration, n)
+        extra = await on_video(video, tmp) if on_video else None
+        return frames, duration, extra
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+async def frames_from_download(fetch: Callable[[str], Awaitable[bool]], n: int = N_FRAMES) -> tuple[list[bytes], Optional[float]]:
+    """(frames, duration_s); ([], None) when the download failed. See read_reel."""
+    frames, duration, _ = await read_reel(fetch, n)
+    return frames, duration
 
 
 def to_image_block(jpeg: bytes) -> dict:

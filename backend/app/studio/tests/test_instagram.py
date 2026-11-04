@@ -425,6 +425,8 @@ async def dbf():
             await conn.execute(text("ALTER TABLE ig_reel ADD COLUMN IF NOT EXISTS analysis_level VARCHAR(20)"))   # older throwaway database
             await conn.execute(text("ALTER TABLE ig_reel ADD COLUMN IF NOT EXISTS thumbnail_url TEXT"))
             await conn.execute(text("ALTER TABLE ig_account ADD COLUMN IF NOT EXISTS profile_picture_url TEXT"))
+            await conn.execute(text("ALTER TABLE ig_reel ADD COLUMN IF NOT EXISTS hook_words TEXT"))
+            await conn.execute(text("ALTER TABLE ig_reel ADD COLUMN IF NOT EXISTS hook_words_status VARCHAR(16)"))
     except Exception as e:  # no database reachable
         pytest.skip(f"no test database: {type(e).__name__}")
     try:
@@ -476,7 +478,7 @@ class FakeSource:
 
 
 def fake_model(monkeypatch):
-    async def fake_fp(blocks, caption, spend, level="full"):
+    async def fake_fp(blocks, caption, spend, level="full", hook_words=None):
         spend.add(0.002)
         return fp()
     monkeypatch.setattr(D, "fingerprint_reel", fake_fp)
