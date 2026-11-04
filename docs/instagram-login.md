@@ -161,6 +161,8 @@ Going beyond the people who have a role on the app (any creator) needs Advanced 
 
 12 reels with 6 frames each cost **$0.096** in total (13 model calls: 12 fingerprints at about $0.0073 plus one summary at about $0.01). That gives about **$0.08 for 10 reels** and about **$0.23 for 30 reels** (about 31 calls; the 30-reel figure is extrapolated from the 12-reel run, which took about a minute). The cap of $0.60 per import is never reached at 30. A later analysis adds one small text call (about $0.003 to $0.01) for the comparison block, and a longer prompt of a few hundred tokens to the two scoring calls.
 
+**Grounding adds little.** A clean DNA answer needs no extra call. When a claim is rejected, the single repair call costs about one summary call (about $0.01): an 8-reel fixture import with a repair cost $0.105 (10 calls) against $0.074 (9 calls) without. In a personalised analysis the rewrite call, only when a sentence is rejected, cost about $0.007, next to the comparison call (about $0.004) and the analysis itself (about $0.27 in the test run). The cost cap (`DNA_COST_CAP_USD`) also gates the repair call.
+
 ## 9. Sources (read 2026-11-04)
 
 * Instagram API with Instagram Login: <https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login>
