@@ -52,7 +52,7 @@ beforeEach(() => {
 })
 afterEach(() => vi.clearAllMocks())
 
-describe('Auto-edit studio page', () => {
+describe('Auto-edit edit page', () => {
   it('shows the named sections, groups the changes, and never lets the re-score contradict the report', async () => {
     statusBody = done
     mount()
@@ -116,7 +116,7 @@ describe('Auto-edit card on the results page', () => {
     const link = await screen.findByRole('link', { name: 'Auto-edit this reel' })
     expect(link.getAttribute('href')).toBe('/edit/abc')
   })
-  it('shows the number of kept changes and opens the studio when an edit exists', async () => {
+  it('shows the number of kept changes and opens the edit page when an edit exists', async () => {
     statusBody = done
     card()
     const link = await screen.findByRole('link', { name: 'Open Auto-edit studio' })

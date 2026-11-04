@@ -109,10 +109,10 @@ def test_no_website_text_says_prysm_studio():
 WEB_BARE_STUDIO = re.compile(r"(?<![\w\-./:])studio(?![\w\-./:?])", re.IGNORECASE)  # also not a property name like `studio?:`
 
 
-def test_no_website_text_uses_the_bare_word_studio_except_the_existing_caption_studio_feature():
+def test_no_website_text_uses_the_bare_word_studio_except_the_named_features():
     hits = []
     for p in web_files():
-        text = strip_comments(p.read_text(errors="ignore")).replace("Caption Studio", "").replace("caption-studio", "")
+        text = strip_comments(p.read_text(errors="ignore")).replace("Caption Studio", "").replace("caption-studio", "").replace("Auto-edit studio", "")
         if WEB_BARE_STUDIO.search(text):
             hits.append(str(p.relative_to(ROOT)))
     assert hits == []
