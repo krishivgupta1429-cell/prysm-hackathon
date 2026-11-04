@@ -12,7 +12,8 @@ from app.studio.autoedit.llm import CostMeter
 
 SR = 48000
 HOP_S = 0.02
-ATTACK_S, RELEASE_S = 0.08, 0.35
+ATTACK_S, RELEASE_S = 0.15, 0.6
+HOLD_S = 0.6   # the voice counts as present through short gaps between words, so the music does not bounce back and forth (pumping)
 
 
 def voice_activity(vocals, sr: int, floor_db: float = -38.0):
@@ -25,7 +26,9 @@ def voice_activity(vocals, sr: int, floor_db: float = -38.0):
     rms = np.sqrt(np.mean(vocals[: n * hop].reshape(n, hop) ** 2, axis=1) + 1e-12)
     db = 20 * np.log10(rms + 1e-9)
     thresh = max(floor_db, np.percentile(db, 95) - 24)
-    return (db > thresh).astype(float)
+    act = (db > thresh).astype(float)
+    from scipy.ndimage import maximum_filter1d
+    return maximum_filter1d(act, size=max(1, int(HOLD_S / HOP_S)))
 
 
 def smooth_gain(active, duck_gain: float):
@@ -91,9 +94,10 @@ def separate_on_modal(src: Path, work: Path, meter: CostMeter) -> tuple[Path, Pa
     return v, r
 
 
-def prepare(src: Path, work: Path, meter: CostMeter, duck_db: float) -> tuple[Path, dict]:
-    """The pre-ducked audio for the renderer (source timeline, 48 kHz stereo) and a small report."""
-    vocals, rest = separate_on_modal(src, work, meter)
+def prepare(src: Path, work: Path, meter: CostMeter, duck_db: float, stems: tuple[Path, Path] | None = None) -> tuple[Path, dict]:
+    """The pre-ducked audio for the renderer (source timeline, 48 kHz stereo) and a small report. `stems` = (vocals, rest) when the
+    separation already ran (it is started early, in parallel with the planner, because it is the slowest step)."""
+    vocals, rest = stems if stems else separate_on_modal(src, work, meter)
     orig = work / "orig48.wav"
     ffx.extract_wav(src, orig, rate=SR, channels=2)
     out = work / "duck.wav"

@@ -16,24 +16,47 @@ from app.studio.autoedit import config
 from app.studio.autoedit.inputs import Inputs, norm_token, FILLERS_EN, FILLERS_HI, snap_to_beat
 from app.studio.autoedit.presets import resolve_style
 
-GROUPS = ("hook", "pacing", "zoom", "text", "audio")  # also the order groups are rendered and verified in
+# A "group" is a bundle of ops that is verified and kept or reverted as one unit. The system assigns it from the op type (bundle_for);
+# whatever group a planner or a revision names is ignored. SAFE bundles are objectively checkable and low-risk; RISKY ones are matters of taste.
+GROUPS = ("hook", "pacing", "captions", "audio", "text", "zoom", "rhythm", "polish")
+RISK = {"hook": "safe", "pacing": "safe", "captions": "safe", "audio": "safe", "text": "risky", "zoom": "risky", "rhythm": "risky", "polish": "risky"}
 OP_TYPES = ("trim", "cut_segment", "remove_filler", "cold_open", "text_overlay", "caption_burn", "zoom_punch", "loudnorm", "music_duck", "sfx")
-TYPE_GROUPS = {
-    "trim": {"pacing"}, "cut_segment": {"pacing"}, "remove_filler": {"pacing"}, "cold_open": {"hook"},
-    "text_overlay": {"hook", "text"}, "caption_burn": {"text"}, "zoom_punch": {"zoom"}, "loudnorm": {"audio"}, "music_duck": {"audio"}, "sfx": {"audio"},
-}
-DEFAULT_TARGET = {"hook": "Hook & Opening", "pacing": "Retention & Pacing", "zoom": "Visual Quality & Originality",
-                  "text": "On-Screen Text", "audio": "Audio & Music"}
+DEFAULT_TARGET = {"hook": "Hook & Opening", "pacing": "Retention & Pacing", "captions": "On-Screen Text", "audio": "Audio & Music",
+                  "text": "On-Screen Text", "zoom": "Visual Quality & Originality", "rhythm": "Retention & Pacing", "polish": "Audio & Music"}
 TEXT_LIMITS = {"hook": 42, "label": 36, "cta": 48}
 MAX_HOOK_WORDS = 8
 REMOVING = ("trim", "cut_segment", "remove_filler")
+MAX_WIDEN_S = 0.6
 TIME_IN_TEXT = re.compile(r"\b\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds)\b|\bat \d+(?::\d+)?\b", re.I)
+
+
+def bundle_for(op_type: str, params: dict) -> str:
+    """The bundle (group) an op belongs to. SAFE: hook (cold open, hook text), pacing (cuts of silence and clear fillers on word boundaries),
+    captions, audio (loudness / denoise). RISKY: zoom punches, cuts that remove spoken words or move onto a beat ("rhythm"), label / CTA
+    text, music ducking and sound effects."""
+    if op_type == "cold_open":
+        return "hook"
+    if op_type == "text_overlay":
+        return "hook" if params.get("role") == "hook" else "text"
+    if op_type == "caption_burn":
+        return "captions"
+    if op_type == "zoom_punch":
+        return "zoom"
+    if op_type == "loudnorm":
+        return "audio"
+    if op_type in ("music_duck", "sfx"):
+        return "polish"
+    return "rhythm" if (params.get("beat") or params.get("removes_speech")) else "pacing"
+
+
+def risk_of(group: str) -> str:
+    return RISK.get(group, "risky")
 
 
 class Op(BaseModel):
     id: str
     type: str
-    group: str
+    group: str = ""   # assigned by the system (bundle_for); whatever a planner writes here is overwritten
     source_step_id: str | None = None
     target_parameter: str = ""
     reason: str = ""
@@ -127,6 +150,11 @@ def align_removal(a: float, b: float, words: list[dict], duration: float) -> tup
     after = [w["start"] for w in kept if w["start"] >= mid - 1e-9]
     a2 = max(before) if before else 0.0
     b2 = min(after) if after else duration
+    # widen to the neighbouring words' edges, but never by more than MAX_WIDEN_S around what was asked for: a 2 s cut next to a 6 s stretch
+    # without speech must not become an 8 s cut
+    lo = min([a] + [w["start"] for w in removed])
+    hi = max([b] + [w["end"] for w in removed])
+    a2, b2 = max(a2, lo - MAX_WIDEN_S), min(b2, hi + MAX_WIDEN_S)
     return round(a2, 3), round(b2, 3), removed
 
 
@@ -158,19 +186,25 @@ def _validate_op(op: Op, inp: Inputs, allowed: list[float]) -> None:
     """Normalises op.params in place (snapping times) or raises ValueError with the reason."""
     if op.type not in OP_TYPES:
         raise ValueError(f"unknown operation type {op.type!r}")
-    if op.group not in TYPE_GROUPS[op.type]:
-        raise ValueError(f"a {op.type} belongs to group {sorted(TYPE_GROUPS[op.type])}, not {op.group!r}")
     p = op.params
     dur = inp.duration
     if op.type in ("trim", "cut_segment"):
         _snap_param(p, "start", allowed, inp)
         _snap_param(p, "end", allowed, inp)
-        if inp.music_driven:  # a music-driven reel cuts on the beat (within 120 ms), never at the very start / end of the file
+        if inp.music_driven and not p.get("silence"):  # a music-driven reel cuts on the beat (within 120 ms), never at the very start / end of the file
             for k in ("start", "end"):
                 if 0.3 < p[k] < dur - 0.3:
-                    p[k] = round(snap_to_beat(p[k], inp.beats), 3)
+                    b = round(snap_to_beat(p[k], inp.beats), 3)
+                    if abs(b - p[k]) > 1e-6:
+                        p["beat"] = True  # a beat-synced cut is a RISKY "rhythm" op: it is a matter of taste, not an objective fix
+                    p[k] = b
         if p["end"] - p["start"] < 0.3:
             raise ValueError("range is shorter than 0.3 s")
+        if inp.words and not p.get("silence"):   # a cut that takes out anything but clear fillers is a content decision, not dead air
+            spans = [(0.0, p["start"]), (p["end"], dur)] if op.type == "trim" else [(p["start"], p["end"])]
+            for a, b in spans:
+                if b - a > 0.05 and any(norm_token(w["word"]) not in FILLERS_EN | FILLERS_HI for w in align_removal(a, b, inp.words, dur)[2]):
+                    p["removes_speech"] = True
         if op.type == "trim" and not (p["start"] <= 0.5 or p["end"] >= dur - 0.5):
             raise ValueError("a trim must keep the start or the end of the video; use cut_segment for the middle")
     elif op.type == "remove_filler":
@@ -236,6 +270,7 @@ def _validate_op(op: Op, inp: Inputs, allowed: list[float]) -> None:
         if not (inp.has_music and inp.has_speech):
             raise ValueError("music ducking needs detected music and speech")
         p["duck_db"] = round(min(max(_num(p.get("duck_db", -9), "duck_db"), -18), -3), 1)
+    op.group = bundle_for(op.type, p)
 
 
 # ------------------------------------------------------------------ whole-plan validation
@@ -255,12 +290,13 @@ def removal_ranges(ops: list[Op], inp: Inputs) -> list[tuple[float, float]]:
         if op.type == "trim":
             for a, b in ((0.0, p["start"]), (p["end"], inp.duration)):
                 if b - a > 0.05:
-                    ranges.append((a, b))
+                    ranges.append((a, b, False))
         else:
-            ranges.append((p["start"], p["end"]))
+            ranges.append((p["start"], p["end"], bool(p.get("silence"))))
     out = []
-    for a, b in ranges:
-        a2, b2, _ = align_removal(a, b, inp.words, inp.duration) if inp.words else (a, b, [])
+    for a, b, exact in ranges:
+        # a stretch the silence detector found is cut exactly: a recogniser's word times across a silence (sung or held words) are not reliable
+        a2, b2, _ = (a, b, []) if (exact or not inp.words) else align_removal(a, b, inp.words, inp.duration)
         pad = pad_for(a2, b2)
         if pad is None:
             continue
@@ -300,10 +336,10 @@ def validate_edl(raw: dict | EDL, inp: Inputs, style_overrides: dict | None = No
         if not op.id or op.id in seen_ids:
             op.id = f"op{i + 1}"
         seen_ids.add(op.id)
-        if not op.target_parameter:
-            op.target_parameter = DEFAULT_TARGET.get(op.group, "")
         try:
             _validate_op(op, inp, allowed)
+            if not op.target_parameter:
+                op.target_parameter = DEFAULT_TARGET.get(op.group, "")
         except (ValueError, TypeError, KeyError) as e:
             dropped.append({"op": op.model_dump(), "reason": str(e)})
             tips.append(Tip(step_id=op.source_step_id, parameter=op.target_parameter, tip=op.reason or f"{op.type} could not be applied",

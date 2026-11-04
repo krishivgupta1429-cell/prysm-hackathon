@@ -3,9 +3,11 @@
 Verification of one group of changes:
   a) objective checks made by tools (duration, loudness, silence, cuts and pacing, text on screen, caption legibility and safe area,
      caption sync against a fresh transcript, black / frozen frames, A/V length, cuts on word gaps, face kept in the zoom);
-  b) a compact AI re-score of the targeted parameters (before and after in ONE call, labelled AI-estimated);
-  c) a Wonder critic that watches before and after (video, else frame strips) and returns approve / reject with flags.
-`decide` is the keep-or-revert rule. Nothing here calls a model except `rescore_pair` and `critique`.
+  b) ONE Wonder critic call per edit: it watches the original and the edited proxy and returns, per bundle of changes, approve / reject
+     plus defects (text over face, cut mid-word, caption timing, audio pumping ...);
+  c) one overall AI re-score (before and after in one call), INFORMATIONAL only: labelled AI-estimated, never a veto.
+`decide_bundle` is the keep-or-revert rule: SAFE bundles are kept when the objective checks pass and the critic reports no defect;
+RISKY bundles need an explicit critic approval and no failed objective check. Models are called only by `rescore_pair` and `critique_all`.
 """
 import difflib
 import hashlib
@@ -13,23 +15,22 @@ import subprocess
 from pathlib import Path
 
 from app.studio.autoedit import config, ffx
-from app.studio.autoedit.edl import EDL, GROUPS, DEFAULT_TARGET
+from app.studio.autoedit.edl import EDL, GROUPS, DEFAULT_TARGET, RISK, risk_of
 from app.studio.autoedit.executor import RenderResult
 from app.studio.autoedit.inputs import Inputs, norm_token
 from app.studio.autoedit.llm import EditLLM, CostCapExceeded
 
 SCORED = ["Hook & Opening", "Retention & Pacing", "Shareability", "Audio & Music", "Trend Alignment", "Visual Quality & Originality"]
 RESCORE_PARAMS = SCORED + ["On-Screen Text"]
-KEEP_MIN_GAIN = 2
-MAX_DROP = 3
-BLOCKING_FLAGS = {"text_over_face", "cut_mid_word", "audio_pumping"}
 LABEL = "AI-estimated (not measured viewership)"
+FLAGS = ("text_over_face", "cut_mid_word", "caption_timing", "audio_pumping", "click_at_cut", "zoom_crops_face", "duplicates_creator_text",
+         "jarring_cut", "tone_mismatch", "other")
 
 
 # ------------------------------------------------------------------ a) objective measurements
 
-def measure(video: str | Path) -> dict:
-    """Tool-measured facts about a video file."""
+def measure(video: str | Path, light: bool = False) -> dict:
+    """Tool-measured facts about a video file. `light` skips the frame-level detectors (cuts, black, frozen): used for the delivered file."""
     info = ffx.probe(video)
     out = {"duration_s": round(info["duration"], 2), "width": info["width"], "height": info["height"], "fps": info["fps"],
            "has_audio": info["has_audio"]}
@@ -49,11 +50,15 @@ def measure(video: str | Path) -> dict:
         sil = ffx.silences(video)
         total = sum(((s["end"] if s["end"] is not None else info["duration"]) - s["start"]) for s in sil)
         out["silence_ratio"] = round(total / max(info["duration"], 1e-6), 3)
+    if light:
+        return out
     cuts = ffx.scene_cuts(video)
     out["cut_count"] = len(cuts)
     out["avg_shot_s"] = round(info["duration"] / (len(cuts) + 1), 2)
-    out["black_frames"] = len(ffx.black_frames(video))
-    out["frozen_frames"] = len(ffx.frozen_frames(video))
+    blk, frz = ffx.black_frames(video), ffx.frozen_frames(video)
+    out["black_frames"], out["frozen_frames"] = len(blk), len(frz)
+    out["black_s"] = round(sum((b["end"] - b["start"]) for b in blk), 2)
+    out["frozen_s"] = round(sum(f["duration"] or 0.0 for f in frz), 2)
     return out
 
 
@@ -114,14 +119,16 @@ def caption_sync(caption_words: list[dict], asr_words: list[dict]) -> dict | Non
             "p90_abs_ms": int(round(sorted(abs(o) for o in offs)[int(len(offs) * 0.9) - 1] * 1000))}
 
 
-def cuts_on_word_gaps(rr: RenderResult, words: list[dict]) -> dict:
-    """Every keep-segment boundary in the source must lie in a gap between words (no cut through a word)."""
+def cuts_on_word_gaps(rr: RenderResult, words: list[dict], silences: list[dict] | None = None) -> dict:
+    """Every keep-segment boundary in the source must lie in a gap between words (no cut through a word). A boundary inside (or within
+    0.2 s of) a stretch the silence detector measured as silent is fine: the signal is the authority there, not the word timestamps."""
     bad = []
+    quiet = [(s["start"] - 0.2, s["end"] + 0.2) for s in (silences or []) if s.get("end") is not None]
     for s in rr.timeline.segments:
         if s.kind == "beat":
             continue
         for t in (s.src_start, s.src_end):
-            if t <= 0.01:
+            if t <= 0.01 or any(a <= t <= b for a, b in quiet):
                 continue
             for w in words:
                 if w["start"] + 0.03 < t < w["end"] - 0.03:
@@ -142,36 +149,69 @@ def zoom_keeps_face(rr: RenderResult, faces: list[dict], inp: Inputs) -> dict:
     return {"ok": not cut, "face_cropped": cut, "zooms_with_face": sum(1 for z in rr.zooms if z["face"]), "zooms": len(rr.zooms)}
 
 
+def cut_clicks(video: Path, rr: RenderResult, work: Path) -> dict:
+    """Look for a sample-to-sample spike at every join of the timeline (a click from a hard cut inside a sound)."""
+    import numpy as np
+    import soundfile as sf
+    wav = Path(work) / f"{Path(video).stem}.clk.wav"
+    Path(work).mkdir(parents=True, exist_ok=True)
+    ffx.extract_wav(video, wav, rate=16000)
+    y, sr = sf.read(str(wav), dtype="float32")
+    if y.ndim > 1:
+        y = y.mean(axis=1)
+    d = np.abs(np.diff(y))
+    bad = []
+    for seg in rr.timeline.segments[1:]:
+        i = int(seg.out_start * sr)
+        w = d[max(0, i - int(0.015 * sr)): i + int(0.015 * sr)]
+        ctx = d[max(0, i - int(0.3 * sr)): i + int(0.3 * sr)]
+        if len(w) and len(ctx) and float(w.max()) > 0.06 and float(w.max()) > 8 * (float(np.percentile(ctx, 99)) + 1e-4):
+            bad.append(round(seg.out_start, 2))
+    return {"ok": not bad, "at": bad, "joins": max(0, len(rr.timeline.segments) - 1)}
+
+
 def objective_checks(group: str, before: dict, after: dict, rr: RenderResult, edl: EDL, inp: Inputs, work: Path, *,
-                     asr_words: list[dict] | None = None, faces: list[dict] | None = None) -> dict:
-    """[{name, ok, detail}] for the group plus the numbers behind them. A failed check blocks keeping the group."""
+                     asr_words: list[dict] | None = None, faces: list[dict] | None = None, video: Path | None = None) -> dict:
+    """[{name, ok, detail}] for the group plus the numbers behind them. A failed check blocks keeping the group
+    (a check marked `warn` is shown but never blocks)."""
     checks = []
 
-    def add(name, ok, detail):
-        checks.append({"name": name, "ok": bool(ok), "detail": detail})
+    def add(name, ok, detail, warn=False):
+        checks.append({"name": name, "ok": bool(ok), "detail": detail, **({"warn": True} if warn else {})})
 
     add("duration within limits", 0 < after["duration_s"] <= config.MAX_RESULT_SECONDS, f"{after['duration_s']} s (limit {config.MAX_RESULT_SECONDS} s)")
-    add("output format 1080x1920", (after["width"], after["height"]) == (config.OUT_W, config.OUT_H), f"{after['width']}x{after['height']}")
-    add("audio and video the same length", after["av_diff_s"] <= 0.12, f"difference {after['av_diff_s']} s")
-    add("no new black frames", after["black_frames"] <= before["black_frames"], f"{before['black_frames']} -> {after['black_frames']}")
-    add("no new frozen frames", after["frozen_frames"] <= before["frozen_frames"], f"{before['frozen_frames']} -> {after['frozen_frames']}")
+    add("output format 9:16 (1080x1920; previews are 540x960)", (after["width"], after["height"]) in ((config.OUT_W, config.OUT_H), (config.OUT_W // 2, config.OUT_H // 2)),
+        f"{after['width']}x{after['height']}")
+    add("audio and video the same length", after["av_diff_s"] <= before.get("av_diff_s", 0.0) + 0.12, f"difference {after['av_diff_s']} s (source: {before.get('av_diff_s', 0.0)} s)")
+    # compared by total duration with a tolerance: a source that is already nearly static (a guitarist standing still) has many
+    # borderline "frozen" stretches, and an overlay or a zoom shifts which of them the detector counts
+    add("no new black frames", after.get("black_s", 0) <= before.get("black_s", 0) + 0.3, f"{before.get('black_s', 0)} s -> {after.get('black_s', 0)} s")
+    add("no new frozen picture", after.get("frozen_s", 0) <= before.get("frozen_s", 0) + 1.0, f"{before.get('frozen_s', 0)} s -> {after.get('frozen_s', 0)} s")
     extra: dict = {}
-    if group == "pacing":
+    if group in ("pacing", "rhythm"):
         removed = inp.duration - (rr.duration - sum(s.length for s in rr.timeline.segments if s.kind != "main"))
         add("at most 25 % removed", removed / inp.duration <= config.MAX_REMOVED_FRACTION + 1e-6, f"{removed:.1f} s of {inp.duration:.1f} s ({removed / inp.duration:.0%})")
-        wg = cuts_on_word_gaps(rr, inp.words)
+        wg = cuts_on_word_gaps(rr, inp.words, inp.silences)
         add("every cut sits between words", wg["ok"], "none inside a word" if wg["ok"] else str(wg["mid_word_cuts"][:3]))
         if "silence_ratio" in before and "silence_ratio" in after:
             add("silence not increased", after["silence_ratio"] <= before["silence_ratio"] + 0.02, f"{before['silence_ratio']:.1%} -> {after['silence_ratio']:.1%}")
+    if group in ("pacing", "rhythm") and video is not None and len(rr.timeline.segments) > 1:
+        ck = cut_clicks(video, rr, work)
+        extra["clicks"] = ck
+        add("no audible clicks at the cuts", ck["ok"], "none found" if ck["ok"] else f"spikes at {ck['at'][:4]} s", warn=True)
     if group == "audio" and after.get("lufs") is not None and any(o.type == "loudnorm" and o.enabled and o.group == "audio" for o in edl.ops):
         add("loudness near -14 LUFS", -15.5 <= after["lufs"] <= -12.5, f"{before.get('lufs')} -> {after['lufs']} LUFS")
         add("true peak at or below -1 dBTP", (after.get("true_peak_db") or -99) <= -0.9, f"{after.get('true_peak_db')} dBTP")
-    if group in ("text", "hook"):
+    if group in ("text", "hook", "captions"):
         geo = text_geometry(rr.ass_path, rr.duration, work)
         extra["text_geometry"] = geo
         add("text inside Instagram's safe area", geo["ok"], "all text frames inside" if geo["ok"] else f"{geo['violations']} frames outside (box {geo.get('bbox_px')})")
         extra["text_seconds"] = geo.get("seconds_with_text", 0.0)
-        if any(o.type == "caption_burn" for o in edl.ops if o.enabled):
+        if rr.caption_words:
+            from app.studio.autoedit.executor import caption_band, face_overlap_share
+            pos = (rr.style or edl.style).get("caption_position", "lower")
+            share = face_overlap_share(faces or [], inp, caption_band(pos, int(edl.style.get("caption_size", 78)))) if faces else 0.0
+            add("captions stay off the face", share <= 0.2, f"captions at '{pos}' overlap the face in {share:.0%} of the sampled shots")
             size = edl.style.get("caption_size", 0)
             add("caption text size legible (>= 56 px)", size >= 56, f"{size} px with a {max(4, size // 14)} px outline")
             sync = caption_sync(rr.caption_words, asr_words or [])
@@ -185,7 +225,7 @@ def objective_checks(group: str, before: dict, after: dict, rr: RenderResult, ed
         zf = zoom_keeps_face(rr, faces or [], inp)
         extra["zoom_face"] = zf
         add("face stays in frame during zooms", zf["ok"], f"{zf['zooms_with_face']} of {zf['zooms']} punches had a detected face (the rest zoom about the centre)")
-    return {"checks": checks, "ok": all(c["ok"] for c in checks), "extra": extra}
+    return {"checks": checks, "ok": all(c["ok"] or c.get("warn") for c in checks), "extra": extra}
 
 
 # ------------------------------------------------------------------ b) compact AI re-score
@@ -246,7 +286,7 @@ Judge from the frames and the numbers above; you cannot hear audio, so judge "Au
 and the transcript. Return ONLY JSON: {{"A": {{"<parameter>": <int>, ...}}, "B": {{...}}, "notes": "<one or two sentences on what differs>"}}
 with exactly the seven parameter names above."""
     r = llm.json_call(prompt, config.planner_model(), f"rescore:{label}", max_tokens=6000,
-                      images=imgs, est_in_tokens=9000)
+                      images=imgs, est_in_tokens=9000, reasoning_effort=config.planner_effort())
     def clean(d):
         return {k: int(max(0, min(100, float(d[k])))) for k in RESCORE_PARAMS if isinstance(d, dict) and k in d and isinstance(d[k], (int, float))}
     a, b = clean(r.get("A")), clean(r.get("B"))
@@ -254,84 +294,124 @@ with exactly the seven parameter names above."""
     return {"before": before, "after": after, "notes": str(r.get("notes", ""))[:300], "label": LABEL}
 
 
-# ------------------------------------------------------------------ c) Wonder critic
+# ------------------------------------------------------------------ c) Wonder critic (one call per edit)
 
-def critique(before_video: Path, after_video: Path, group: str, ops: list[dict], llm: EditLLM, work: Path, label: str) -> dict:
-    """The critic watches both videos. Falls back to frame strips if the API refuses video. Returns
-    {"verdict": "approve|reject|unavailable", "reasons": [...], "flags": [...], "mode": "video|frames"}."""
+def _describe(o: dict) -> str:
+    p = o.get("params") or {}
+    t = o["type"]
+    if t == "text_overlay":
+        return f"text overlay ({p.get('role')}): \"{p.get('text')}\""
+    if t in ("cut_segment", "remove_filler"):
+        return f"{t} {p.get('start')}-{p.get('end')} s of the original" + (f" (the word \"{p.get('word')}\")" if p.get("word") else "")
+    if t == "trim":
+        return f"trim to keep {p.get('start')}-{p.get('end')} s"
+    if t == "zoom_punch":
+        return f"zoom punch at {p.get('at')} s x{p.get('scale')}"
+    if t == "cold_open":
+        return f"cold open: teaser of {p.get('start')}-{p.get('end')} s shown first"
+    if t == "loudnorm":
+        return f"loudness to {p.get('target_lufs')} LUFS" + (" with denoise" if p.get("denoise") else "")
+    if t == "music_duck":
+        return f"music ducked {p.get('duck_db')} dB under the voice"
+    if t == "caption_burn":
+        return "burned-in word-highlight captions"
+    return t
+
+
+def critique_all(before_video: Path, after_video: Path, bundles: list[dict], llm: EditLLM, work: Path, label: str) -> dict:
+    """ONE critic call: Wonder watches (and hears) the original and the edited proxy, with every bundle of changes applied, and judges
+    each bundle. `bundles` = [{"id", "risk", "ops": [op dict]}]. Returns
+    {"verdict": "ok|unavailable", "mode": "video|frames", "bundles": {id: {"verdict", "defects": [{flag, severity, detail}], "reasons": []}}, "notes"}.
+    Falls back to frame strips when the API refuses video."""
     from app.studio.autoedit import config as cfg
-    changes = "\n".join(f"- {o['type']}: {o.get('reason', '')} {o.get('params', {})}" for o in ops)[:1500]
-    prompt = f"""You are the critic of an automatic video editor. Video 1 is the ORIGINAL (before); video 2 is the EDITED version (after) with
-this group of changes ("{group}") applied:
-{changes}
+    listing = "\n".join(f"- bundle \"{b['id']}\" ({b['risk']}): " + "; ".join(_describe(o) for o in b["ops"]) for b in bundles)[:3500]
+    prompt = f"""You are the quality critic of an automatic video editor for Instagram Reels. Video 1 is the ORIGINAL; video 2 is the EDITED
+version. The edit applies these bundles of changes:
+{listing}
 
-Watch and listen to both. Decide whether the edited version is better for a viewer scrolling Instagram Reels, and look for faults the
-edit introduced. Flags you may raise (only when real): "text_over_face", "cut_mid_word", "caption_timing", "audio_pumping" (volume
-ducking/normalising that breathes or clips), "tone_mismatch" (the edit feels off for this creator or content).
-Return ONLY JSON: {{"verdict": "approve" or "reject", "reasons": ["<short reason>", ...], "flags": [{{"flag": "<name>", "detail": "<where/what>"}}]}}.
-Approve only if the edited version is at least as good overall and has no blocking fault."""
+Watch AND listen to both. For each bundle decide whether it made the video better or at least not worse, and list every real DEFECT
+it introduced that a viewer would notice: {', '.join(FLAGS)}.
+- Give each defect a severity: "major" (a viewer would notice and be annoyed: a cut inside a word, text on the face, captions out of sync,
+  pumping or clicking audio, a zoom that crops the face, text that repeats what the creator already shows) or "minor" (barely noticeable).
+- Do not invent defects. If a bundle is fine, give an empty defects list. A subtle but harmless change is an "approve".
+- "reject" a bundle only for a major defect or when it clearly makes the video worse.
+- Put the time (seconds in the edited video) in each detail.
+Return ONLY JSON: {{"bundles": {{"<bundle id>": {{"verdict": "approve" or "reject", "reasons": ["<short>"], "defects": [{{"flag": "<one of the flags>", "severity": "major" or "minor", "at_s": <seconds in the EDITED video, a number>, "detail": "<what, when>"}}]}}}}, "notes": "<one sentence overall>"}}
+with one entry for EVERY bundle id listed above."""
     mode = "video"
     try:
-        b, a = (work / "critic_before.mp4"), (work / "critic_after.mp4")
-        if not b.exists():
-            ffx.make_proxy(before_video, b)
-        ffx.make_proxy(after_video, a)
-        r = llm.json_call(prompt, cfg.critic_model(), f"critic:{label}", max_tokens=6000, videos=[b, a], est_in_tokens=5000)
+        r = llm.json_call(prompt, cfg.critic_model(), f"critic:{label}", max_tokens=6000, videos=[before_video, after_video], est_in_tokens=7000,
+                          reasoning_effort=cfg.critic_effort())
     except CostCapExceeded:
         raise
-    except Exception as e_video:
+    except Exception:
         mode = "frames"
         try:
             strips = _jpegs(before_video, work, 6) + _jpegs(after_video, work, 6)
-            r = llm.json_call(prompt + "\n(The videos are given as frames: the first 7 images are the original, the next 7 the edit.)",
-                              cfg.critic_model(), f"critic-frames:{label}", max_tokens=6000, images=strips, est_in_tokens=7000)
+            r = llm.json_call(prompt + "\n(The videos are given as frames: the first 7 images are the original, the next 7 the edit. You cannot hear audio in this mode: do not judge audio.)",
+                              cfg.critic_model(), f"critic-frames:{label}", max_tokens=6000, images=strips, est_in_tokens=7000,
+                              reasoning_effort=cfg.critic_effort())
         except CostCapExceeded:
             raise
         except Exception as e_frames:
-            return {"verdict": "unavailable", "reasons": [f"the critic could not be reached ({type(e_frames).__name__}: {str(e_frames)[:120]})"],
-                    "flags": [], "mode": "none"}
-    verdict = str(r.get("verdict", "")).lower()
-    flags = [f for f in (r.get("flags") or []) if isinstance(f, dict) and f.get("flag")]
-    return {"verdict": verdict if verdict in ("approve", "reject") else "reject", "reasons": [str(x)[:200] for x in (r.get("reasons") or [])][:5],
-            "flags": flags[:6], "mode": mode}
+            return {"verdict": "unavailable", "mode": "none", "bundles": {}, "notes": f"the critic could not be reached ({type(e_frames).__name__}: {str(e_frames)[:120]})"}
+    out: dict = {}
+    raw = r.get("bundles") if isinstance(r.get("bundles"), dict) else {}
+    for b in bundles:
+        e = raw.get(b["id"]) if isinstance(raw.get(b["id"]), dict) else None
+        if e is None:
+            out[b["id"]] = {"verdict": "unknown", "defects": [], "reasons": []}
+            continue
+        defects = []
+        for d in (e.get("defects") or []):
+            if isinstance(d, dict) and (d.get("flag") or d.get("detail")):
+                sev = "minor" if str(d.get("severity", "major")).lower() == "minor" else "major"
+                at = d.get("at_s")
+                defects.append({"flag": str(d.get("flag", "other"))[:30], "severity": sev, "detail": str(d.get("detail", ""))[:200],
+                                "at_s": float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) else None})
+        v = str(e.get("verdict", "")).lower()
+        out[b["id"]] = {"verdict": v if v in ("approve", "reject") else "unknown", "defects": defects[:6],
+                        "reasons": [str(x)[:200] for x in (e.get("reasons") or [])][:4]}
+    return {"verdict": "ok", "mode": mode, "bundles": out, "notes": str(r.get("notes", ""))[:300]}
 
 
 # ------------------------------------------------------------------ keep or revert
 
-def decide(group: str, targeted: str, scores: dict | None, objective_ok: bool, objective_failures: list[str], critic: dict | None) -> dict:
-    """The rule: keep only if the targeted parameter improves by >= 2, no scored parameter drops by more than 3, objective checks
-    pass and the critic approves. Returns {keep, reasons[]} (the reasons explain a revert or confirm a keep)."""
-    reasons, keep = [], True
-    if scores and scores.get("before") and scores.get("after"):
-        b, a = scores["before"], scores["after"]
-        gain = a.get(targeted, 0) - b.get(targeted, 0) if targeted in a and targeted in b else None
-        if gain is None:
-            keep = False
-            reasons.append(f"the targeted parameter ({targeted}) could not be scored")
-        elif gain < KEEP_MIN_GAIN:
-            keep = False
-            reasons.append(f"{targeted} changed by {gain:+d} (needs at least +{KEEP_MIN_GAIN})")
-        drops = [(k, a[k] - b[k]) for k in SCORED if k in a and k in b and a[k] - b[k] < -MAX_DROP]
-        if drops:
-            keep = False
-            reasons.append("scored parameters dropped by more than 3: " + ", ".join(f"{k} {d:+d}" for k, d in drops))
-        if keep:
-            reasons.append(f"{targeted} {gain:+d}")
-    else:
-        keep = False
-        reasons.append("the AI re-score was not available")
+def decide_bundle(group: str, objective_ok: bool, objective_failures: list[str], critic: dict | None) -> dict:
+    """The keep-or-revert rule.
+    SAFE bundles (hook, pacing, captions, audio): kept when every objective check passes and the critic reports no major defect
+    (if the critic cannot be reached they are kept on the objective checks alone, and the reason says so).
+    RISKY bundles (zoom, rhythm, text labels, polish): kept only when no objective check fails AND the critic explicitly approves.
+    The AI re-score plays no part. Returns {keep, risk, reasons[]}."""
+    risk = risk_of(group)
+    reasons: list[str] = []
+    keep = True
     if not objective_ok:
         keep = False
         reasons.append("objective checks failed: " + "; ".join(objective_failures))
-    if critic is None or critic.get("verdict") == "unavailable":
-        if config.critic_required():
+    entry = None
+    if critic and critic.get("verdict") == "ok":
+        entry = critic["bundles"].get(group)
+    if entry is None:
+        if risk == "risky":
             keep = False
-            reasons.append("the critic was not available, so the change could not be verified")
-    elif critic["verdict"] != "approve":
-        keep = False
-        reasons.append("the critic rejected it: " + "; ".join(critic.get("reasons") or ["no reason given"]))
-    blocking = [f["flag"] for f in (critic or {}).get("flags", []) if f.get("flag") in BLOCKING_FLAGS]
-    if blocking:
-        keep = False
-        reasons.append("the critic flagged: " + ", ".join(blocking))
-    return {"keep": keep, "reasons": reasons}
+            reasons.append("this is a RISKY change and the critic could not verify it, so it is off (you can turn it on)")
+        else:
+            reasons.append("the critic could not be reached: kept on the objective checks alone")
+    else:
+        major = [d for d in entry["defects"] if d["severity"] == "major"]
+        minor = [d for d in entry["defects"] if d["severity"] != "major"]
+        if major or entry["verdict"] == "reject":
+            keep = False
+            what = "; ".join(f"{d['flag']}: {d['detail']}" for d in major) or "; ".join(entry["reasons"]) or "no reason given"
+            reasons.append("the critic found a defect: " + what)
+        elif risk == "risky" and entry["verdict"] != "approve":
+            keep = False
+            reasons.append("RISKY change, and the critic did not approve it" + (": " + "; ".join(entry["reasons"]) if entry["reasons"] else ""))
+        elif keep:
+            reasons.append("the critic approved it" if entry["verdict"] == "approve" else "the critic reported no defect")
+        if minor and keep:
+            reasons.append("minor notes: " + "; ".join(f"{d['flag']}: {d['detail']}" for d in minor))
+    if keep and objective_ok:
+        reasons.insert(0, "objective checks pass")
+    return {"keep": keep, "risk": risk, "reasons": reasons}

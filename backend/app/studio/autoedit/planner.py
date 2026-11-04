@@ -90,27 +90,26 @@ TRANSCRIPT (word@start-end, seconds)
 TIMESTAMPS THAT EXIST (use ONLY times from this list, the transcript word edges above, or 0)
 {json.dumps(timing, ensure_ascii=False)}
 
-OPERATION TYPES (group in brackets; times are seconds of the ORIGINAL video)
-- trim [pacing] {{"start","end"}}: keep only [start,end]; the video's head and/or tail is removed (dead air at the start or end)
-- cut_segment [pacing] {{"start","end"}}: remove that part (a pause, a stumble, a repeated take); the renderer aligns it to word boundaries
-- remove_filler [pacing] {{"start","end","word"}}: remove ONE clear filler word taken from filler_candidates (exact start/end)
-- cold_open [hook] {{"start","end","beat_s"}}: a 1-3 s strongest moment (from the analysis timestamps / energy peaks) is shown first as a teaser, then the video starts. Only when that moment is after 3 s
-- text_overlay [hook or text] {{"text","role":"hook|label|cta","anchor":"output|source","start","end","position":"top|center|lower"}}: hook text uses anchor "output" (shown 0-2.8 s of the NEW video) and at most 7 words / 42 chars; labels/cta use anchor "source" with times from the list (<= 36 / 48 chars). Never put a timestamp or the word 'seconds' in on-screen text, and never show two texts at the same time. Write the text in the language the creator speaks (Hindi / Hinglish stays Hindi / Hinglish).
-- caption_burn [text] {{}}: burned-in word-highlight captions from the transcript. Do NOT add it when existing_on_screen_text_share >= 0.4 (the video already has captions) or there is no speech
-- zoom_punch [zoom] {{"at","scale":1.08-1.15,"duration":0.25}}: a quick punch-in at an emphasis moment (a word start / a cut / an analysis timestamp); at most one per 2.5 s, usually 2-4 per video
-- loudnorm [audio] {{"target_lufs":-14,"true_peak":-1.5,"denoise":true}}: loudness to -14 LUFS and light denoise. Add it when an audio step asks for it or loudness/clarity is a problem
-- sfx [audio] {{"level_db":-22}}: subtle synthesised whoosh at visible jump cuts and an impact at a cold open; only worth it for the energetic preset or fast music-driven reels, and only together with cuts
-- music_duck [audio] {{"duck_db":-9}}: lowers the music under speech; only when has_music and has_speech
+ALREADY HANDLED BY THE SYSTEM (do NOT plan these): burned-in captions, loudness / denoise, dead-air and filler-word removal. They are
+measured and applied automatically. Plan only what needs judgement: the hook, zoom punches, labels, stumble cuts, effects.
+
+OPERATION TYPES (times are seconds of the ORIGINAL video; the system assigns each op's group itself)
+- cut_segment {{"start","end"}}: remove a stumble or a repeated take (not plain pauses or fillers); the renderer aligns it to word boundaries
+- cold_open {{"start","end","beat_s"}}: a 1-3 s strongest moment (from the analysis timestamps / energy peaks) is shown first as a teaser, then the video starts. Only when that moment is after 3 s
+- text_overlay {{"text","role":"hook|label|cta","anchor":"output|source","start","end","position":"top|center|lower"}}: hook text uses anchor "output" (shown 0-2.8 s of the NEW video) and at most 7 words / 42 chars; labels/cta use anchor "source" with times from the list (<= 36 / 48 chars). Never put a timestamp or the word 'seconds' in on-screen text, and never show two texts at the same time. Do not repeat what the creator already says or shows as text. Write the text in the language the creator speaks (Hindi / Hinglish stays Hindi / Hinglish).
+- zoom_punch {{"at","scale":1.08-1.15,"duration":0.25}}: a quick punch-in at an emphasis moment (a word start / a cut / an analysis timestamp); at most one per 2.5 s, usually 2-4 per video
+- sfx {{"level_db":-22}}: subtle synthesised whoosh at visible jump cuts and an impact at a cold open; only worth it for the energetic preset or fast music-driven reels, and only together with cuts
+- music_duck {{"duck_db":-9}}: lowers the music under speech; only when has_music and has_speech and the music clearly competes with the voice
 
 RULES
-- At most 12 operations in total, each with: "id" ("o1"...), "type", "group", "source_step_id" (the [id] of the step it implements), "target_parameter" (that step's parameter name), "reason" (one short line), "params".
-- At most 25% of the video may be removed. Cut conservatively: clear dead air, stumbles and clear fillers only. Never cut a sentence the hook or payoff depends on.
+- At most {config.PLANNER_MAX_OPS} operations in total, each with: "id" ("o1"...), "type", "source_step_id" (the [id] of the step it implements), "target_parameter" (that step's parameter name), "reason" (one short line), "params".
+- At most 25% of the video may be removed. Never cut a sentence the hook or payoff depends on.
 - Never invent a timestamp. If a step needs something that is not in the lists (a new shot, re-recording, a different song, posting advice), do NOT make an operation: add it to "manual_tips" instead.
-- Prefer few strong operations over many weak ones. Each group (hook, pacing, zoom, text, audio) should only appear if a fix step supports it.
-- Preset for style: "{preset}" ({json.dumps({k: v for k, v in style.items() if k in ('zoom_scale','zoom_max','cut_aggressiveness')})}); at most {style['zoom_max']} zoom punches; cut_aggressiveness {style['cut_aggressiveness']} (0 = barely cut, 1 = tight).
+- Prefer few strong operations over many weak ones; an empty "ops" list is fine when no step needs one.
+- Preset for style: "{preset}" ({json.dumps({k: v for k, v in style.items() if k in ('zoom_scale','zoom_max','cut_aggressiveness')})}); at most {style['zoom_max']} zoom punches.
 {retry}
 OUTPUT FORMAT
-{{"ops":[{{"id":"o1","type":"...","group":"hook|pacing|zoom|text|audio","source_step_id":"hook#1","target_parameter":"Hook & Opening","reason":"...","params":{{...}}}}],
+{{"ops":[{{"id":"o1","type":"...","source_step_id":"hook#1","target_parameter":"Hook & Opening","reason":"...","params":{{...}}}}],
  "manual_tips":[{{"step_id":"visual#2","parameter":"Visual Quality & Originality","tip":"...","why_manual":"needs a reshoot"}}]}}"""
 
 
@@ -122,7 +121,7 @@ class PlanResult:
     notes: list[str] = field(default_factory=list)
 
 
-GROUP_DROP_ORDER = ("zoom", "text", "pacing", "audio", "hook")  # which group loses ops first when the plan is over a hard limit
+GROUP_DROP_ORDER = ("polish", "zoom", "text", "rhythm", "pacing", "hook")  # which group loses ops first when the plan is over a hard limit
 
 
 def force_valid(edl: EDL, inp: Inputs) -> Validation:
@@ -131,7 +130,7 @@ def force_valid(edl: EDL, inp: Inputs) -> Validation:
     guard = 0
     while v.errors and v.edl.ops and guard < 30:
         guard += 1
-        removable = [o for g in GROUP_DROP_ORDER for o in reversed(v.edl.ops) if o.group == g and o.type not in ("loudnorm", "caption_burn")]
+        removable = [o for g in GROUP_DROP_ORDER for o in reversed(v.edl.ops) if o.group == g and o.type not in ("loudnorm", "caption_burn") and not o.id.startswith("auto_")]
         if not removable:
             removable = list(reversed(v.edl.ops))
         victim = removable[0]
@@ -154,7 +153,7 @@ def plan(analysis: dict, inp: Inputs, llm: EditLLM, preset: str = "clean", step_
     for attempt in (1, 2):
         prompt = build_prompt(analysis, inp, steps, preset, errors)
         try:
-            raw = llm.json_call(prompt, config.planner_model(), f"plan#{attempt}", max_tokens=14000, est_in_tokens=6000)
+            raw = llm.json_call(prompt, config.planner_model(), f"plan#{attempt}", max_tokens=9000, est_in_tokens=5000, reasoning_effort=config.planner_effort())
         except CostCapExceeded:
             raise
         except ValueError as e:
@@ -171,3 +170,21 @@ def plan(analysis: dict, inp: Inputs, llm: EditLLM, preset: str = "clean", step_
         v = force_valid(last.edl, inp)
         return PlanResult(v.edl, v, 2, notes=["the plan broke a global limit twice; the extra operations were trimmed automatically"])
     raise ValueError("the planner returned no usable plan twice")
+
+
+def merge_auto(edl: EDL, auto_ops: list, inp: Inputs) -> tuple[Validation, list[dict]]:
+    """The system's own ops (defaults.build) first, then the planner's judgement ops. The planner's loudnorm / caption_burn are dropped:
+    those are decided from measurements. Returns the validated union and the notes about what was dropped."""
+    notes = []
+    mine = [o.model_copy(deep=True) for o in auto_ops]
+    theirs = []
+    for o in edl.ops:
+        if o.type in ("loudnorm", "caption_burn"):
+            notes.append({"area": "planner", "text": f"The planner's {o.type} was ignored: the system decides it from measurements."})
+        else:
+            theirs.append(o)
+    merged = EDL(ops=mine + theirs, style=edl.style, manual_tips=list(edl.manual_tips))
+    v = validate_edl(merged, inp)
+    if v.errors:
+        v = force_valid(v.edl, inp)
+    return v, notes

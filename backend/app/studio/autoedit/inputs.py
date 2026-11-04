@@ -44,6 +44,11 @@ class Inputs:
     beats: list[float] = field(default_factory=list)         # beat times (s) of a music-driven reel
     bpm: float = 0.0
     music_driven: bool = False                               # music present and little speech: cuts snap to beats
+    lufs: float | None = None                                # integrated loudness of the source (ebur128)
+    true_peak_db: float | None = None
+    noise_floor_db: float | None = None                      # level of the quietest 10 % of the audio (dBFS, 50 ms windows)
+    speech_level_db: float | None = None                     # level of the loudest 10 %
+    stats_version: int = 0                                   # 2 = noise floor measured inside silences only (older caches are re-measured)
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -137,6 +142,42 @@ def energy_peaks(wav_path: str | Path, n: int = 6, win_s: float = 0.5) -> list[d
     return peaks
 
 
+def needs_conditioning(lufs: float | None, noise_floor_db: float | None) -> bool:
+    return (lufs is not None and lufs < -21.0) or (noise_floor_db is not None and noise_floor_db > -50.0)
+
+
+def noise_in_silences(wav_path: str | Path, silences: list[dict]) -> float | None:
+    """Background noise level (dBFS RMS) measured only inside the stretches the silence detector found, 0.5 s of them at least. Music has no
+    such stretches, so music is never mistaken for noise (a plain percentile of the whole track would call a guitar 'noise')."""
+    import numpy as np
+    import soundfile as sf
+    y, sr = sf.read(str(wav_path), dtype="float32")
+    if y.ndim > 1:
+        y = y.mean(axis=1)
+    parts = [y[int(s["start"] * sr) + int(0.1 * sr): int(s["end"] * sr) - int(0.1 * sr)] for s in silences if s.get("end") is not None and s["end"] - s["start"] >= 0.5]
+    parts = [p for p in parts if len(p) > 0]
+    if sum(len(p) for p in parts) < 1.0 * sr:   # under a second of real silence is not enough to call anything 'noise'
+        return None
+    z = np.concatenate(parts)
+    return round(float(20 * np.log10(np.sqrt(np.mean(z ** 2)) + 1e-9)), 1)
+
+
+def noise_stats(wav_path: str | Path) -> dict:
+    """Loud level (90th percentile of 50 ms RMS) in dBFS, plus the 10th percentile (a rough floor that is only meaningful for speech)."""
+    import numpy as np
+    import soundfile as sf
+    y, _sr = sf.read(str(wav_path), dtype="float32")
+    if y.ndim > 1:
+        y = y.mean(axis=1)
+    win = int(_sr * 0.05)
+    if len(y) < win * 20:
+        return {}
+    n = len(y) // win
+    rms = np.sqrt(np.mean(y[: n * win].reshape(n, win) ** 2, axis=1)) + 1e-9
+    db = 20 * np.log10(rms)
+    return {"noise_floor_db": round(float(np.percentile(db, 10)), 1), "speech_level_db": round(float(np.percentile(db, 90)), 1)}
+
+
 BEAT_SNAP_S = 0.12
 MUSIC_DRIVEN_MAX_SPEECH_SHARE = 0.35
 
@@ -183,14 +224,28 @@ def build_inputs(video_path: str | Path, work_dir: str | Path, analysis: dict | 
     dur = info["duration"]
     words, segments, language, asr_cost = [], [], "unknown", 0.0
     wav16 = work / "audio16k.wav"
-    peaks, silences = [], []
+    peaks, silences, loud, noise = [], [], {}, {}
+    asr_wav = wav16
     if info["has_audio"]:
         ffx.extract_wav(video_path, wav16)
         silences = ffx.silences(video_path)
         peaks = energy_peaks(wav16)
+        loud = ffx.loudness(video_path)
+        try:
+            noise = noise_stats(wav16)
+            noise["noise_floor_db"] = noise_in_silences(wav16, silences)
+        except Exception:
+            noise = {}
+        if needs_conditioning(loud.get("lufs"), noise.get("noise_floor_db")):
+            # a quiet or noisy recording makes the recogniser guess (wrong language, invented words): give it a levelled, de-noised copy
+            asr_wav = work / "audio16k_asr.wav"
+            try:
+                ffx.run(["-y", "-i", str(video_path), "-vn", "-ac", "1", "-ar", "16000", "-af", "highpass=f=80,afftdn=nr=12:nf=-45,loudnorm=I=-16:TP=-1.5:LRA=11", str(asr_wav)])
+            except ffx.FFmpegError:
+                asr_wav = wav16
         if client is not None:
             try:
-                r = client.whisper(wav16)
+                r = client.whisper(asr_wav)
                 words, segments, language, asr_cost = r.words, r.segments, r.language or "unknown", r.cost_usd
             except Exception:
                 words = []
@@ -216,4 +271,5 @@ def build_inputs(video_path: str | Path, work_dir: str | Path, analysis: dict | 
     return Inputs(duration=dur, width=info["width"], height=info["height"], fps=info["fps"], orientation=info["orientation"],
                   is_9x16=info["is_9x16"], has_audio=info["has_audio"], language=language, words=words, segments=segs,
                   scene_cuts=cuts, silences=silences, energy_peaks=peaks, has_music=has_music,
-                  has_speech=len(words) >= 3, beats=beats, bpm=bpm, music_driven=music_driven, analysis_times=analysis_times, fillers=find_fillers(words), asr_cost_usd=asr_cost)
+                  has_speech=len(words) >= 3, beats=beats, bpm=bpm, music_driven=music_driven, analysis_times=analysis_times,
+                  stats_version=2, lufs=loud.get("lufs"), true_peak_db=loud.get("true_peak_db"), noise_floor_db=noise.get("noise_floor_db"), speech_level_db=noise.get("speech_level_db"), fillers=find_fillers(words), asr_cost_usd=asr_cost)

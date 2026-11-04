@@ -26,7 +26,7 @@ from app.core.security import get_current_user
 from app.models.prysm_analysis import PrysmAnalysis
 from app.models.user import User
 from app.studio.autoedit import config, ffx, orchestrator as O, revise
-from app.studio.autoedit.edl import EDL, GROUPS
+from app.studio.autoedit.edl import EDL, GROUPS, RISK
 from app.studio.autoedit.llm import CostCapExceeded, CostMeter, EditLLM
 from app.studio.autoedit.presets import PRESETS
 from app.studio.autoedit.storage import edit_prefix, get_storage, upload_key
@@ -118,9 +118,11 @@ def public_state(st: dict) -> dict:
         except Exception:
             label = o["type"]
         verdict = g.get("status", "pending")
+        op_rev = (out.get("op_reverts") or {}).get(o["id"])
         changes.append({"id": o["id"], "type": o["type"], "group": o["group"], "label": label, "reason": o.get("reason", ""),
                         "target_parameter": o.get("target_parameter", ""), "source_step_id": o.get("source_step_id"), "enabled": o["enabled"],
-                        "verdict": verdict, "verdict_reasons": g.get("reasons", []), "user_override": o["id"] in overrides})
+                        "verdict": "reverted" if op_rev else verdict, "verdict_reasons": [op_rev] if op_rev else g.get("reasons", []), "user_override": o["id"] in overrides,
+                        "risk": g.get("risk") or RISK.get(o["group"], "risky")})
     out["changes"] = changes
     out["running"] = out.get("status") in ("queued", "running")
     out["presets"] = list(PRESETS)

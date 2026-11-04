@@ -109,7 +109,20 @@ def caption_events(words: list[dict], style: dict) -> list[dict]:
                                 else texts[idx])
                 parts.append(" ".join(toks))
             events.append({"start": start, "end": end, "text": "\\N".join(parts), "plain": " ".join(texts), "chunk": ci})
-    return events
+    return _no_overlap_between_chunks(events)
+
+
+def _no_overlap_between_chunks(events: list[dict]) -> list[dict]:
+    """Two chunks must never be on screen together: libass would stack them and push the new one up for its whole duration (seen as a caption
+    that sits higher than the others). A chunk's last event is cut where the next chunk starts; recogniser word times often overlap by 50-100 ms."""
+    out = []
+    for i, e in enumerate(events):
+        nxt = next((x for x in events[i + 1:] if x["chunk"] > e["chunk"]), None)
+        if nxt is not None and nxt["start"] < e["end"]:
+            e = {**e, "end": nxt["start"]}
+        if e["end"] - e["start"] >= 0.03:
+            out.append(e)
+    return out
 
 
 def build_ass(words: list[dict], overlays: list[dict], style: dict, out_duration: float, with_captions: bool = True) -> str:

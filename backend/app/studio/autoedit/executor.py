@@ -34,12 +34,13 @@ class RenderResult:
     notes: list[str] = field(default_factory=list)
     seconds: float = 0.0
     ops_applied: list[str] = field(default_factory=list)
+    style: dict = field(default_factory=dict)   # the style actually used (the caption position may have moved off a face)
 
 
-def render_key(src_id: str, edl: EDL, groups: set[str]) -> str:
-    """Cache key: the source, the style and exactly the enabled ops of the included groups."""
+def render_key(src_id: str, edl: EDL, groups: set[str], proxy: bool = False) -> str:
+    """Cache key: the source, the style and exactly the enabled ops of the included groups (and whether it is a verification proxy)."""
     ops = [o.model_dump() for o in edl.ops if o.enabled and o.group in groups]
-    blob = json.dumps({"src": src_id, "ops": ops, "style": edl.style, "g": sorted(groups)}, sort_keys=True)
+    blob = json.dumps({"src": src_id, "ops": ops, "style": edl.style, "g": sorted(groups), "proxy": proxy}, sort_keys=True)
     return hashlib.sha1(blob.encode()).hexdigest()[:20]
 
 
@@ -69,12 +70,14 @@ def zoom_expressions(zooms: list[dict]) -> tuple[str, str, str]:
     return "1+" + "+".join(terms), "0.5+" + "+".join(fx), "0.5+" + "+".join(fy)
 
 
-def _fit_chain(inp: Inputs) -> str:
+def _fit_chain(inp: Inputs, w: int = config.OUT_W, h: int = config.OUT_H) -> str:
+    flags = "lanczos" if w >= config.OUT_W else "bicubic"
     if inp.is_9x16 or abs(inp.width / inp.height - 9 / 16) < 0.06:
-        return f"scale={config.OUT_W}:{config.OUT_H}:flags=lanczos,setsar=1"
-    return (f"split[fa][fb];[fa]scale={config.OUT_W}:{config.OUT_H}:force_original_aspect_ratio=increase,"
-            f"crop={config.OUT_W}:{config.OUT_H},boxblur=40:8,eq=brightness=-0.08[fbg];"
-            f"[fb]scale={config.OUT_W}:{config.OUT_H}:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1[ffg];"
+        return f"scale={w}:{h}:flags={flags},setsar=1"
+    k = w / config.OUT_W
+    return (f"split[fa][fb];[fa]scale={w}:{h}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{h},boxblur={max(2, int(40 * k))}:{max(1, int(8 * k))},eq=brightness=-0.08[fbg];"
+            f"[fb]scale={w}:{h}:force_original_aspect_ratio=decrease:flags={flags},setsar=1[ffg];"
             f"[fbg][ffg]overlay=(W-w)/2:(H-h)/2,setsar=1")
 
 
@@ -113,6 +116,30 @@ def place_overlay(text: str, role: str, wanted: str, face_y: tuple[float, float]
         if face_y is None or bottom < face_y[0] or top > face_y[1]:
             return pos
     return wanted
+
+
+def caption_band(pos: str, size: int) -> tuple[float, float]:
+    """Approximate (top, bottom) in canvas pixels of a two-line caption block at a caption position."""
+    h = 2 * size * 1.3 + 20
+    align, mv = captions.POSITION_MARGINS[pos]
+    if align == 8:
+        return mv, mv + h
+    if align == 5:
+        return config.OUT_H / 2 - h / 2, config.OUT_H / 2 + h / 2
+    return config.OUT_H - mv - h, config.OUT_H - mv
+
+
+def face_overlap_share(faces: list[dict], inp: Inputs, band: tuple[float, float]) -> float:
+    """Share of the sampled face boxes whose vertical extent touches the band (canvas pixels)."""
+    if not faces:
+        return 0.0
+    hit = 0
+    for f in faces:
+        c = _to_canvas(f, inp)
+        top, bottom = (c["cy"] - c["h"] / 2) * config.OUT_H, (c["cy"] + c["h"] / 2) * config.OUT_H
+        if bottom > band[0] and top < band[1]:
+            hit += 1
+    return hit / len(faces)
 
 
 # ------------------------------------------------------------------ the render
@@ -234,6 +261,7 @@ class Pieces:
     zooms: list
     notes: list
     applied: list
+    style: dict = field(default_factory=dict)
 
 
 def plan_pieces(edl: EDL, inp: Inputs, groups: set[str], faces: list[dict] | None = None) -> Pieces:
@@ -247,6 +275,13 @@ def plan_pieces(edl: EDL, inp: Inputs, groups: set[str], faces: list[dict] | Non
     caps = any(o.type == "caption_burn" for o in active)
     words_out = surviving_words(tl, inp.words) if caps and inp.words else []
     faces = faces or []
+    if words_out and faces:  # captions must not sit on the face: move them to another position when they would for >20 % of the shots
+        size, pos = int(style["caption_size"]), style["caption_position"]
+        if face_overlap_share(faces, inp, caption_band(pos, size)) > 0.2:
+            alt = next((a for a in ("upper", "lower", "middle") if a != pos and face_overlap_share(faces, inp, caption_band(a, size)) <= 0.2), None)
+            if alt:
+                notes.append(f"captions moved from {pos} to {alt} to stay off the face")
+                style = {**style, "caption_position": alt}
     # overlays on the output timeline, kept off the face
     overlays = []
     for o in active:
@@ -269,7 +304,10 @@ def plan_pieces(edl: EDL, inp: Inputs, groups: set[str], faces: list[dict] | Non
         if f:
             c = _to_canvas(f, inp)
             face_y = ((c["cy"] - c["h"] / 2) * config.OUT_H - 20, (c["cy"] + c["h"] / 2) * config.OUT_H + 20)
-        pos = place_overlay(p["text"], p["role"], p["position"], face_y, style)
+        wanted = p["position"]
+        if f is None and wanted == "center":   # no face known at that moment (a sideways or distant shot): the top band is the safer place
+            wanted = "top"
+        pos = place_overlay(p["text"], p["role"], wanted, face_y, style)
         if pos != p["position"]:
             notes.append(f"overlay {o.id} moved from {p['position']} to {pos} to stay off the face")
         overlays.append({"id": o.id, "text": p["text"], "start": round(a, 3), "end": round(b, 3), "position": pos, "role": p["role"]})
@@ -305,29 +343,32 @@ def plan_pieces(edl: EDL, inp: Inputs, groups: set[str], faces: list[dict] | Non
         zooms.append({"id": o.id, "out_at": at, "scale": scale, "fx": fx, "fy": fy, "fw": fw, "fh": fh, "face": bool(f)})
         last_out, k = at, k + 1
 
-    return Pieces(active, tl, words_out, overlays, zooms, notes, applied)
+    return Pieces(active, tl, words_out, overlays, zooms, notes, applied, style)
 
 
 def render(edl: EDL, inp: Inputs, src: str | Path, out: str | Path, work: str | Path, groups: set[str], *,
-           faces: list[dict] | None = None, duck_wav: str | Path | None = None, preset_x264: str = "fast") -> RenderResult:
+           faces: list[dict] | None = None, duck_wav: str | Path | None = None, preset_x264: str = "veryfast",
+           proxy: bool = False) -> RenderResult:
     """Render the enabled ops of `groups` (an empty set = just the 9:16 conversion). Returns the result with the retimed
-    captions / overlays so the caller can verify them."""
+    captions / overlays so the caller can verify them. `proxy=True` renders the same edit at 540x960 with a fast, small encode:
+    that is what verification and the critic look at; the creator's file is rendered once, at full size, from the final ops."""
     t0 = time.time()
     src, out, work = Path(src), Path(out), Path(work)
     work.mkdir(parents=True, exist_ok=True)
     pc = plan_pieces(edl, inp, groups, faces)
     active, tl, words_out, overlays, zooms, notes, applied = pc.active, pc.timeline, pc.words, pc.overlays, pc.zooms, pc.notes, pc.applied
-    style = edl.style
+    style = pc.style
+    W, H = (config.OUT_W // 2, config.OUT_H // 2) if proxy else (config.OUT_W, config.OUT_H)
 
     # video graph
     vlines, vlast = _video_segments(tl, inp)
-    fit = _fit_chain(inp)
+    fit = _fit_chain(inp, W, H)
     vlines.append(f"{vlast}{fit}[vfit]")
     cur = "[vfit]"
     if zooms:
         z, fx, fy = zoom_expressions(zooms)
-        vlines.append(f"{cur}scale=w='trunc({config.OUT_W}*({z})/2)*2':h='trunc({config.OUT_H}*({z})/2)*2':eval=frame:flags=bicubic,"
-                      f"crop={config.OUT_W}:{config.OUT_H}:x='(iw-{config.OUT_W})*({fx})':y='(ih-{config.OUT_H})*({fy})'[vz]")
+        vlines.append(f"{cur}scale=w='trunc({W}*({z})/2)*2':h='trunc({H}*({z})/2)*2':eval=frame:flags=bicubic,"
+                      f"crop={W}:{H}:x='(iw-{W})*({fx})':y='(ih-{H})*({fy})'[vz]")
         cur = "[vz]"
     ass_path = None
     if words_out or overlays:
@@ -365,9 +406,9 @@ def render(edl: EDL, inp: Inputs, src: str | Path, out: str | Path, work: str | 
             if m and all(k in m for k in ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")):
                 ln_args += (f":measured_I={m['input_i']}:measured_TP={m['input_tp']}:measured_LRA={m['input_lra']}"
                             f":measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true")
-            alines.append(f"{tail}{_pre_filters(ln)}loudnorm={ln_args},alimiter=limit={lim:.3f}:level=disabled,aresample=48000[aout]")
+            alines.append(f"{tail}{_pre_filters(ln)}loudnorm={ln_args},alimiter=limit={lim:.3f}:level=disabled,aresample=48000,apad[aout]")
         else:
-            alines.append(f"{tail}aresample=48000[aout]")
+            alines.append(f"{tail}aresample=48000,apad[aout]")  # apad: a source whose audio is shorter than its picture still ends together (-t cuts it at the video length)
 
     graph = ";".join(vlines + alines)
     cmd = ["-y", "-i", str(src)]
@@ -376,12 +417,12 @@ def render(edl: EDL, inp: Inputs, src: str | Path, out: str | Path, work: str | 
     cmd += ["-filter_complex", graph, "-map", "[vout]"]
     if alines:
         cmd += ["-map", "[aout]"]
-    cmd += ["-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p", "-crf", "18", "-preset", preset_x264,
+    cmd += ["-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p", "-crf", "27" if proxy else "18", "-preset", "veryfast" if proxy else preset_x264,
             "-r", _fmt(inp.fps or 30.0), "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709"]
     if alines:
-        cmd += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
+        cmd += ["-c:a", "aac", "-b:a", "96k" if proxy else "192k", "-ar", "48000"]
     cmd += ["-t", _fmt(tl.duration + 0.001), "-movflags", "+faststart", str(out)]
     out.parent.mkdir(parents=True, exist_ok=True)
     ffx.run(cmd, timeout=1200)
     return RenderResult(path=out, duration=tl.duration, timeline=tl, overlays=overlays, caption_words=words_out, zooms=zooms,
-                        ass_path=ass_path, notes=notes, seconds=round(time.time() - t0, 2), ops_applied=applied)
+                        ass_path=ass_path, notes=notes, seconds=round(time.time() - t0, 2), ops_applied=applied, style=style)

@@ -16,44 +16,91 @@ def scores(before, after):
     return {"before": {**base, **before}, "after": {**base, **after}}
 
 
-def test_keep_when_the_target_gains_2_nothing_drops_over_3_objective_passes_and_critic_approves():
-    d = verify.decide("pacing", "Retention & Pacing", scores({}, {"Retention & Pacing": 72, "Shareability": 67}), True, [], OK_CRITIC)
-    assert d["keep"] and "Retention & Pacing +2" in d["reasons"][0]
+def critic(**bundles):
+    return {"verdict": "ok", "mode": "video", "notes": "", "bundles": bundles}
 
 
-@pytest.mark.parametrize("after,why", [
-    ({"Retention & Pacing": 71}, "needs at least +2"),                               # +1 is not enough
-    ({"Retention & Pacing": 75, "Hook & Opening": 66}, "dropped by more than 3"),    # a scored parameter fell by 4
-])
-def test_revert_when_the_score_rule_is_not_met(after, why):
-    d = verify.decide("pacing", "Retention & Pacing", scores({}, after), True, [], OK_CRITIC)
-    assert not d["keep"] and why in " ".join(d["reasons"])
+APPROVE = {"verdict": "approve", "defects": [], "reasons": []}
+MAJOR = {"verdict": "reject", "defects": [{"flag": "cut_mid_word", "severity": "major", "detail": "at 3.2 s"}], "reasons": ["cut inside a word"]}
+MINOR = {"verdict": "approve", "defects": [{"flag": "tone_mismatch", "severity": "minor", "detail": "slightly loud"}], "reasons": []}
 
 
-def test_a_drop_of_exactly_3_is_allowed():
-    assert verify.decide("pacing", "Retention & Pacing", scores({}, {"Retention & Pacing": 75, "Hook & Opening": 67}), True, [], OK_CRITIC)["keep"]
+def test_a_safe_bundle_is_kept_when_objective_checks_pass_and_the_critic_reports_no_defect():
+    d = verify.decide_bundle("pacing", True, [], critic(pacing=APPROVE))
+    assert d["keep"] and d["risk"] == "safe" and "objective checks pass" in d["reasons"][0]
+    assert verify.decide_bundle("captions", True, [], critic(captions={"verdict": "unknown", "defects": [], "reasons": []}))["keep"]  # silence from the critic is not a defect
 
 
-def test_revert_when_an_objective_check_fails_even_if_everything_else_is_great():
-    d = verify.decide("text", "On-Screen Text", scores({}, {"On-Screen Text": 90}), False, ["text inside safe area (3 frames outside)"], OK_CRITIC)
-    assert not d["keep"] and "objective checks failed" in d["reasons"][-1]
+def test_a_safe_bundle_with_a_minor_note_is_still_kept_and_the_note_is_shown():
+    d = verify.decide_bundle("audio", True, [], critic(audio=MINOR))
+    assert d["keep"] and any("minor notes" in r for r in d["reasons"])
 
 
-def test_revert_when_the_critic_rejects_or_raises_a_blocking_flag_or_is_missing():
-    s = scores({}, {"Retention & Pacing": 80})
-    rej = verify.decide("pacing", "Retention & Pacing", s, True, [], {"verdict": "reject", "reasons": ["cuts the CTA"], "flags": [], "mode": "video"})
-    assert not rej["keep"] and "cuts the CTA" in " ".join(rej["reasons"])
-    flag = verify.decide("pacing", "Retention & Pacing", s, True, [], {"verdict": "approve", "reasons": [], "flags": [{"flag": "cut_mid_word", "detail": "x"}], "mode": "video"})
-    assert not flag["keep"] and "cut_mid_word" in " ".join(flag["reasons"])
-    gone = verify.decide("pacing", "Retention & Pacing", s, True, [], {"verdict": "unavailable", "reasons": [], "flags": []})
-    assert not gone["keep"] and "could not be verified" in " ".join(gone["reasons"])
-    soft = verify.decide("pacing", "Retention & Pacing", s, True, [], {"verdict": "approve", "reasons": [], "flags": [{"flag": "caption_timing", "detail": "x"}], "mode": "video"})
-    assert soft["keep"]  # a non-blocking flag is recorded, not a veto
+def test_a_safe_bundle_is_reverted_for_a_major_defect_or_a_failed_objective_check():
+    d = verify.decide_bundle("pacing", True, [], critic(pacing=MAJOR))
+    assert not d["keep"] and "cut_mid_word" in " ".join(d["reasons"])
+    d = verify.decide_bundle("captions", False, ["captions in sync (400 ms)"], critic(captions=APPROVE))
+    assert not d["keep"] and "objective checks failed" in " ".join(d["reasons"])
 
 
-def test_revert_when_there_is_no_score_for_the_target():
-    assert not verify.decide("pacing", "Retention & Pacing", None, True, [], OK_CRITIC)["keep"]
-    assert not verify.decide("pacing", "Retention & Pacing", {"before": {"Hook & Opening": 70}, "after": {"Hook & Opening": 80}}, True, [], OK_CRITIC)["keep"]
+def test_a_safe_bundle_is_kept_on_the_objective_checks_alone_when_the_critic_is_unreachable():
+    d = verify.decide_bundle("audio", True, [], {"verdict": "unavailable", "mode": "none", "bundles": {}})
+    assert d["keep"] and "objective checks alone" in " ".join(d["reasons"])
+
+
+def test_a_risky_bundle_needs_an_explicit_critic_approval():
+    assert verify.decide_bundle("zoom", True, [], critic(zoom=APPROVE))["keep"]
+    d = verify.decide_bundle("zoom", True, [], critic(zoom={"verdict": "unknown", "defects": [], "reasons": []}))
+    assert not d["keep"] and "RISKY" in " ".join(d["reasons"])
+    d = verify.decide_bundle("zoom", True, [], {"verdict": "unavailable", "mode": "none", "bundles": {}})
+    assert not d["keep"] and "could not verify" in " ".join(d["reasons"])
+    assert not verify.decide_bundle("rhythm", False, ["x"], critic(rhythm=APPROVE))["keep"]
+    assert not verify.decide_bundle("polish", True, [], critic(polish=MAJOR))["keep"]
+
+
+def test_the_ai_rescore_plays_no_part_in_the_decision():
+    import inspect
+    assert "score" not in inspect.signature(verify.decide_bundle).parameters
+
+
+class FakeCriticLLM:
+    def __init__(self, replies):
+        self.replies, self.calls = list(replies), []
+
+    def json_call(self, prompt, model, label, **kw):
+        self.calls.append((label, bool(kw.get("videos")), bool(kw.get("images"))))
+        r = self.replies.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+
+BUNDLES = [{"id": "pacing", "risk": "safe", "ops": [{"type": "cut_segment", "params": {"start": 1.0, "end": 1.4}}]},
+           {"id": "zoom", "risk": "risky", "ops": [{"type": "zoom_punch", "params": {"at": 2.0, "scale": 1.1}}]}]
+
+
+def test_one_critic_call_judges_every_bundle(tmp_path):
+    llm = FakeCriticLLM([{"bundles": {"pacing": {"verdict": "approve", "defects": []},
+                                      "zoom": {"verdict": "reject", "reasons": ["crops the face"], "defects": [{"flag": "zoom_crops_face", "severity": "major", "detail": "2.1 s"}]}},
+                         "notes": "fine overall"}])
+    out = verify.critique_all(tmp_path / "a.mp4", tmp_path / "b.mp4", BUNDLES, llm, tmp_path, "edit")
+    assert len(llm.calls) == 1 and llm.calls[0][1] is True
+    assert out["verdict"] == "ok" and out["mode"] == "video" and out["bundles"]["zoom"]["defects"][0]["flag"] == "zoom_crops_face"
+    assert out["bundles"]["pacing"]["verdict"] == "approve"
+
+
+def test_a_bundle_the_critic_skipped_is_unknown(tmp_path):
+    out = verify.critique_all(tmp_path / "a.mp4", tmp_path / "b.mp4", BUNDLES, FakeCriticLLM([{"bundles": {"pacing": {"verdict": "approve"}}}]), tmp_path, "edit")
+    assert out["bundles"]["zoom"]["verdict"] == "unknown"
+
+
+def test_the_critic_falls_back_to_frames_and_then_to_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setattr(verify, "_jpegs", lambda *a, **k: [b"x"])
+    llm = FakeCriticLLM([RuntimeError("video refused"), {"bundles": {"pacing": {"verdict": "approve"}, "zoom": {"verdict": "approve"}}}])
+    out = verify.critique_all(tmp_path / "a.mp4", tmp_path / "b.mp4", BUNDLES, llm, tmp_path, "edit")
+    assert out["mode"] == "frames" and [c[1:] for c in llm.calls] == [(True, False), (False, True)]
+    out = verify.critique_all(tmp_path / "a.mp4", tmp_path / "b.mp4", BUNDLES, FakeCriticLLM([RuntimeError("no"), RuntimeError("no")]), tmp_path, "edit")
+    assert out["verdict"] == "unavailable"
 
 
 def test_caption_sync_reports_the_median_offset():

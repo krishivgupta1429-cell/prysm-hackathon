@@ -37,11 +37,11 @@ def test_times_outside_the_video_are_refused():
     assert v.edl.ops == [] and "outside the video" in v.dropped[0]["reason"]
 
 
-def test_more_than_14_ops_is_a_plan_level_error():
+def test_more_than_24_ops_is_a_plan_level_error():
     inp = make_inputs(duration=80.0, scene_cuts=[float(t) for t in range(0, 80)], silences=[], words=[], segments=[], energy_peaks=[], analysis_times=[], fillers=[])
-    ops = [op(i, "text_overlay", "text", text=f"label {i}", role="label", anchor="source", start=float(3 * i + 2), end=float(3 * i + 3), position="top") for i in range(16)]
+    ops = [op(i, "text_overlay", "text", text=f"label {i}", role="label", anchor="source", start=float(3 * i + 2), end=float(3 * i + 3), position="top") for i in range(26)]
     v = validate(ops, inp)
-    assert any("operations; the limit is 14" in e for e in v.errors)
+    assert any("operations; the limit is 24" in e for e in v.errors)
 
 
 def test_removing_more_than_25_percent_is_a_plan_level_error():
@@ -54,6 +54,13 @@ def test_removal_is_aligned_to_words_and_cannot_cut_through_one():
     a, b, removed = E.align_removal(1.1, 2.4, inp.words, inp.duration)  # starts inside 'um', ends inside 'what'
     assert [w["word"] for w in removed] == ["um", "exactly"]  # 'what' (2.35-2.55) is only 0.05 inside: kept whole
     assert a == 0.85 and b == 2.35                            # widened to the gap edges: end of 'is', start of 'what'
+
+
+def test_widening_to_the_word_edges_is_capped_so_a_short_cut_never_swallows_a_long_gap():
+    words = [{"word": "end", "start": 1.0, "end": 1.5}, {"word": "mumble", "start": 8.0, "end": 8.6}, {"word": "tail", "start": 8.7, "end": 9.2}, {"word": "next", "start": 14.0, "end": 14.5}]
+    a, b, removed = E.align_removal(8.0, 9.2, words, 20.0)       # both words go; the gaps on both sides are 6.5 s and 4.8 s wide
+    assert [w["word"] for w in removed] == ["mumble", "tail"]
+    assert (a, b) == (7.4, 9.8)                                  # 0.6 s of the gap on each side, not 6.5 s and 4.8 s
 
 
 def test_pad_is_between_60_and_120_ms_and_tiny_cuts_are_skipped():
@@ -92,9 +99,30 @@ def test_zoom_punches_closer_than_2_5_seconds_are_dropped():
     assert len(v.edl.ops) == 1 and "must be 2.5 s apart" in v.dropped[0]["reason"]
 
 
-def test_group_must_match_the_operation_type():
-    v = validate([op(1, "zoom_punch", "audio", at=4.0)])
-    assert v.edl.ops == [] and "belongs to group" in v.dropped[0]["reason"]
+def test_the_system_assigns_each_op_to_its_bundle_whatever_the_planner_said():
+    v = validate([op(1, "zoom_punch", "audio", at=4.0), op(2, "caption_burn", "text"), op(3, "loudnorm", "hook"),
+                  op(4, "text_overlay", "text", text="Wait for it", role="hook", anchor="output", end=2.8),
+                  op(5, "text_overlay", "hook", text="Mid label", role="label", anchor="source", start=3.3, end=4.4, position="top"),
+                  op(6, "cut_segment", "zoom", start=1.3, end=1.8)])
+    assert {o.id: o.group for o in v.edl.ops} == {"o1": "zoom", "o2": "captions", "o3": "audio", "o4": "hook", "o5": "text", "o6": "pacing"}
+    assert [E.risk_of(g) for g in ("hook", "pacing", "captions", "audio")] == ["safe"] * 4
+    assert [E.risk_of(g) for g in ("zoom", "text", "rhythm", "polish")] == ["risky"] * 4
+
+
+def test_a_cut_that_takes_out_spoken_words_is_a_risky_content_cut_but_a_pause_cut_is_safe():
+    inp = make_inputs()
+    v = validate([op(1, "cut_segment", "pacing", start=3.3, end=4.4), op(2, "cut_segment", "pacing", start=4.4, end=4.9)])   # 1: removes two words; 2: only the 0.5 s gap
+    groups = {o.id: o.group for o in v.edl.ops}
+    assert groups == {"o1": "rhythm", "o2": "pacing"}
+    assert validate([op(3, "remove_filler", "pacing", start=1.0, end=1.3, word="um")]).edl.ops[0].group == "pacing"
+
+
+def test_a_beat_snapped_cut_on_a_music_driven_reel_is_a_risky_rhythm_op():
+    beats = [round(0.5 * i, 3) for i in range(1, 11)]
+    inp = make_inputs(duration=6.0, music_driven=True, beats=beats, bpm=120.0, scene_cuts=[], silences=[], energy_peaks=[], analysis_times=[], fillers=[],
+                      words=[], segments=[])
+    v = validate([op(1, "cut_segment", "pacing", start=1.45, end=2.55)], inp)
+    assert v.edl.ops == [] or v.edl.ops[0].group == "rhythm"
 
 
 def test_music_duck_needs_music_and_speech():

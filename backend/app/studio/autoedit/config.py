@@ -15,7 +15,8 @@ FONTS_DIR = PKG_DIR / "fonts"
 FONT_NAME = "Poppins"  # OFL; covers Latin and Devanagari, so Hindi / Hinglish captions render and shape correctly
 
 MAX_SOURCE_SECONDS = 90
-MAX_OPS = 14
+MAX_OPS = 24  # the planner adds at most 8 (PLANNER_MAX_OPS); the rest are the system's own dead-air / filler / caption / loudness ops
+PLANNER_MAX_OPS = 8
 MAX_REMOVED_FRACTION = 0.25
 MAX_RESULT_SECONDS = 90
 MAX_REVISIONS = 5
@@ -44,6 +45,16 @@ def planner_model() -> str:
 
 def critic_model() -> str:
     return env("AUTO_EDIT_CRITIC_MODEL", "muse-wonder-1.0")
+
+
+def planner_effort() -> str | None:
+    """reasoning_effort sent with the planner call (the Meta API accepts minimal | low | medium | high): `low` cut the plan from ~80 s to ~20 s."""
+    return env("AUTO_EDIT_PLANNER_EFFORT", "low") or None
+
+
+def critic_effort() -> str | None:
+    """reasoning_effort for the critic: `low` took ~33 s on a 54 s video where the default took ~75 s, with the same verdicts."""
+    return env("AUTO_EDIT_CRITIC_EFFORT", "low") or None
 
 
 def max_cost_usd() -> float:

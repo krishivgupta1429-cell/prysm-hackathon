@@ -1,22 +1,29 @@
 """Built during the Meta Global AI Developer Hackathon (new work).
 
-The Auto-edit run: inputs -> plan -> for each group render, verify, keep or revert -> final render and downloads.
+The Auto-edit run, built for speed and for keeping what helps:
+  inputs -> (planner  ||  faces  ||  baseline proxy  ||  Demucs stems) -> the system's own SAFE ops + the planner's ops ->
+  proxy renders at 540x960, one per bundle of changes plus one with everything, rendered in parallel ->
+  objective checks per bundle  ||  ONE Wonder critic call on the everything-proxy ->
+  keep / revert per bundle (SAFE: objective checks + no critic defect; RISKY: critic approval too) ->
+  the full-resolution file is rendered ONCE from the kept ops  ||  one informational AI re-score of before / after.
 Also toggles, preset changes and revisions (`rerender`). Everything blocking; the API runs it in a worker thread.
 State is one JSON document (also written to storage) with a live trace of events for the UI.
 """
 import copy
-from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import shutil
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.studio.autoedit import config, captions, ffx, verify, planner, faces as facesmod, ducking
+from app.studio.autoedit import config, captions, ffx, verify, planner, defaults, faces as facesmod, ducking
 from app.studio.autoedit import cover as cover_mod, executor, inputs as inputs_mod
-from app.studio.autoedit.edl import EDL, GROUPS, DEFAULT_TARGET, Op, validate_edl, ops_by_group
+from app.studio.autoedit.edl import EDL, GROUPS, RISK, DEFAULT_TARGET, Op, validate_edl, ops_by_group
 from app.studio.autoedit.llm import CostMeter, CostCapExceeded, EditLLM
 from app.studio.autoedit.presets import resolve_style
 from app.studio.autoedit.storage import Storage, edit_prefix, upload_key
@@ -24,7 +31,8 @@ from app.studio.autoedit.timeline import surviving_words
 
 log = logging.getLogger(__name__)
 
-GROUP_LABEL = {"hook": "Hook", "pacing": "Pacing", "zoom": "Zoom punches", "text": "Captions and text", "audio": "Audio"}
+GROUP_LABEL = {"hook": "Hook", "pacing": "Dead air and fillers", "captions": "Captions", "audio": "Loudness and noise", "text": "Labels and CTA text",
+               "zoom": "Zoom punches", "rhythm": "Cuts that remove speech or follow the beat", "polish": "Music ducking and sound effects"}
 
 
 def now() -> str:
@@ -38,8 +46,8 @@ def state_key(aid: str) -> str:
 def new_state(aid: str, user_id: str, preset: str = "clean") -> dict:
     return {"analysis_id": aid, "user_id": user_id, "status": "queued", "phase": "queued", "created_at": now(), "updated_at": now(),
             "preset": preset, "style_overrides": {}, "revisions": [], "trace": [], "groups": {}, "edl": None, "manual_tips": [],
-            "dropped_ops": [], "baseline": None, "final": None, "cost": CostMeter().to_json(), "timing": {}, "error": None,
-            "notes": [], "label": verify.LABEL}
+            "dropped_ops": [], "decisions": [], "critic": None, "baseline": None, "final": None, "cost": CostMeter().to_json(),
+            "timing": {"stages": {}}, "error": None, "notes": [], "label": verify.LABEL}
 
 
 class Runner:
@@ -59,7 +67,13 @@ class Runner:
         self.inp: inputs_mod.Inputs | None = None
         self.faces: list[dict] = []
         self.duck: Path | None = None
+        self.stems: tuple[Path, Path] | None = None
+        self._stems_future = None
         self.t_start = time.time()
+        self._lock = threading.RLock()
+        self._duck_lock = threading.Lock()
+        self._render_locks: dict[str, threading.Lock] = {}
+        state.setdefault("timing", {}).setdefault("stages", {})
 
     # ------------------------------------------------------------------ plumbing
     def close(self):
@@ -67,22 +81,34 @@ class Runner:
             shutil.rmtree(self.work, ignore_errors=True)
 
     def event(self, kind: str, msg: str, **data):
-        self.state["trace"].append({"t": now(), "kind": kind, "msg": msg, **data})
-        self.save()
+        with self._lock:
+            self.state["trace"].append({"t": now(), "kind": kind, "msg": msg, **data})
+            self.save()
 
     def save(self):
-        self.state["updated_at"] = now()
-        self.state["cost"] = self.meter.to_json()
-        self.state["timing"]["elapsed_s"] = round(time.time() - self.t_start, 1)
-        try:
-            self.storage.put_bytes(state_key(self.aid), json.dumps(self.state, ensure_ascii=False).encode(), "application/json")
-        except Exception as e:  # a storage hiccup must not kill the edit
-            log.warning("[AutoEdit] could not save state: %s", e)
-        self.publish(self.state)
+        with self._lock:
+            self.state["updated_at"] = now()
+            self.state["cost"] = self.meter.to_json()
+            self.state["timing"]["elapsed_s"] = round(time.time() - self.t_start, 1)
+            try:
+                self.storage.put_bytes(state_key(self.aid), json.dumps(self.state, ensure_ascii=False).encode(), "application/json")
+            except Exception as e:  # a storage hiccup must not kill the edit
+                log.warning("[AutoEdit] could not save state: %s", e)
+            self.publish(self.state)
 
     def phase(self, name: str, msg: str):
         self.state["phase"] = name
         self.event("phase", msg)
+
+    @contextmanager
+    def stage(self, name: str):
+        """Wall-clock seconds of a named stage (stages can overlap each other; each is timed on its own)."""
+        t0 = time.time()
+        try:
+            yield
+        finally:
+            st = self.state["timing"]["stages"]
+            st[name] = round(st.get(name, 0.0) + time.time() - t0, 1)
 
     def _client(self):
         if self.client is None:
@@ -95,18 +121,36 @@ class Runner:
         if not self.src.exists():
             self.storage.get_file(upload_key(self.state["user_id"], self.aid), self.src)
 
-    # ------------------------------------------------------------------ inputs and plan
+    # ------------------------------------------------------------------ inputs
     def load_inputs(self):
         self._fetch_original()
         ik = edit_prefix(self.aid) + "inputs.json"
         if self.storage.exists(ik):
             self.inp = inputs_mod.Inputs.from_json(json.loads(self.storage.get_bytes(ik)))
+            if self.inp.has_audio and (self.inp.lufs is None or self.inp.stats_version < 2):  # saved by an older version: re-measure the audio stats
+                self._measure_audio()
+                self.storage.put_bytes(ik, json.dumps(self.inp.to_json(), ensure_ascii=False).encode(), "application/json")
         else:
             step_list = planner.extract_steps(self.analysis)
             self.inp = inputs_mod.build_inputs(self.src, self.work / "inputs", self.analysis, self._client(), step_list)
             if self.inp.asr_cost_usd:
                 self.meter.add("whisper", "word-level transcript", self.inp.asr_cost_usd)
             self.storage.put_bytes(ik, json.dumps(self.inp.to_json(), ensure_ascii=False).encode(), "application/json")
+
+    def _measure_audio(self):
+        try:
+            loud = ffx.loudness(self.src)
+            self.inp.lufs, self.inp.true_peak_db = loud.get("lufs"), loud.get("true_peak_db")
+            wav = self.work / "inputs" / "audio16k.wav"
+            wav.parent.mkdir(parents=True, exist_ok=True)
+            ffx.extract_wav(self.src, wav)
+            ns = inputs_mod.noise_stats(wav)
+            self.inp.noise_floor_db, self.inp.speech_level_db = inputs_mod.noise_in_silences(wav, self.inp.silences), ns.get("speech_level_db")
+            self.inp.stats_version = 2
+        except Exception as e:
+            log.info("[AutoEdit] audio stats failed: %s", e)
+
+    def load_faces(self):
         fk = edit_prefix(self.aid) + "faces.json"
         if self.storage.exists(fk):
             self.faces = json.loads(self.storage.get_bytes(fk))
@@ -124,59 +168,93 @@ class Runner:
         return e
 
     # ------------------------------------------------------------------ rendering with a cache
-    def render_set(self, edl: EDL, groups: set[str], tag: str) -> tuple[Path, executor.RenderResult | None, str]:
-        """Render (or fetch from the cache) the enabled ops of `groups`. Returns (mp4, result-or-None if cached, key)."""
-        key = executor.render_key(self.aid, edl, groups)
+    def render_set(self, edl: EDL, groups: set[str], tag: str, proxy: bool = False) -> tuple[Path, executor.RenderResult | None, str]:
+        """Render (or fetch from the cache) the enabled ops of `groups`. Returns (mp4, result-or-None if cached, key).
+        Proxies (540x960) live only in the work dir; full-resolution renders are also stored (they are what the creator downloads)."""
+        key = executor.render_key(self.aid, edl, groups, proxy)
         out = self.work / "renders" / f"{key}.mp4"
         skey = edit_prefix(self.aid) + f"renders/{key}.mp4"
-        rr = None
-        if out.exists():
-            return out, None, key
-        if self.storage.exists(skey):
-            self.storage.get_file(skey, out)
-            return out, None, key
-        needs_duck = any(o.type == "music_duck" and o.enabled and o.group in groups for o in edl.ops)
-        if needs_duck:
-            self._ensure_duck(edl)
-        rr = executor.render(edl, self.inp, self.src, out, self.work / f"w_{tag}", groups, faces=self.faces, duck_wav=self.duck if needs_duck else None)
-        self.state["timing"]["render_s"] = round(self.state["timing"].get("render_s", 0) + rr.seconds, 1)
-        self.storage.put_file(skey, out, "video/mp4")
-        return out, rr, key
+        with self._lock:
+            lock = self._render_locks.setdefault(key, threading.Lock())
+        with lock:
+            if out.exists():
+                return out, None, key
+            if not proxy and self.storage.exists(skey):
+                self.storage.get_file(skey, out)
+                return out, None, key
+            needs_duck = any(o.type == "music_duck" and o.enabled and o.group in groups for o in edl.ops)
+            if needs_duck:
+                self._ensure_duck(edl)
+            rr = executor.render(edl, self.inp, self.src, out, self.work / f"w_{tag}_{key[:6]}", groups, faces=self.faces,
+                                 duck_wav=self.duck if needs_duck else None, proxy=proxy)
+            with self._lock:
+                self.state["timing"]["render_s"] = round(self.state["timing"].get("render_s", 0) + rr.seconds, 1)
+            if not proxy:
+                self.storage.put_file(skey, out, "video/mp4")
+            return out, rr, key
+
+    def _start_stems(self):
+        """Demucs on Modal (voice vs music) is the slowest single step: start it while the planner is thinking."""
+        try:
+            self.event("info", "separating voice and music with Demucs on Modal (in the background)")
+            self.stems = ducking.separate_on_modal(self.src, self.work / "duck", self.meter)
+        except CostCapExceeded:
+            raise
+        except Exception as e:
+            log.info("[AutoEdit] Demucs unavailable: %s", e)
+            self.event("info", f"Demucs unavailable ({str(e)[:80]}): music ducking will be skipped")
 
     def _ensure_duck(self, edl: EDL):
-        if self.duck is not None:
-            return
-        dk = edit_prefix(self.aid) + "duck.wav"
-        p = self.work / "duck" / "duck.wav"
-        if self.storage.exists(dk):
-            self.storage.get_file(dk, p)
-        else:
-            op = next(o for o in edl.ops if o.type == "music_duck")
-            self.event("info", "separating voice and music with Demucs on Modal")
-            p, info = ducking.prepare(self.src, self.work / "duck", self.meter, op.params["duck_db"])
-            self.storage.put_file(dk, p, "audio/wav")
-            self.event("info", f"music ducked under the voice (voice present {info['voice_share']:.0%} of the time)")
-        self.duck = p
+        with self._duck_lock:
+            if self.duck is not None:
+                return
+            if self._stems_future is not None:
+                self._stems_future.result()
+            dk = edit_prefix(self.aid) + "duck.wav"
+            p = self.work / "duck" / "duck.wav"
+            if self.storage.exists(dk):
+                self.storage.get_file(dk, p)
+            else:
+                op = next(o for o in edl.ops if o.type == "music_duck")
+                p, info = ducking.prepare(self.src, self.work / "duck", self.meter, op.params["duck_db"], self.stems)
+                self.storage.put_file(dk, p, "audio/wav")
+                self.event("info", f"music ducked under the voice (voice present {info['voice_share']:.0%} of the time)")
+            self.duck = p
 
     # ------------------------------------------------------------------ the full run
     def run(self):
         st = self.state
         st["status"] = "running"
         try:
-            self.phase("inputs", "reading the video: speech with word timings, cuts, silences")
-            self.load_inputs()
-            self.event("info", f"{self.inp.duration:.0f} s, {len(self.inp.words)} words ({self.inp.language}), {len(self.inp.scene_cuts)} cuts, music={self.inp.has_music}")
-            self.phase("planning", "planning the edit from Prysm's fix steps")
-            t0 = time.time()
-            res = planner.plan(self.analysis, self.inp, self.llm, st["preset"])
-            st["timing"]["plan_s"] = round(time.time() - t0, 1)
-            edl = res.edl
-            st["edl"] = edl.model_dump()
-            st["manual_tips"] = [t.model_dump() for t in edl.manual_tips]
-            st["dropped_ops"] = res.validation.dropped
-            st["notes"] += res.notes
-            self.event("plan", f"{len(edl.ops)} changes planned, {len(edl.manual_tips)} manual tips", ops=len(edl.ops), tips=len(edl.manual_tips))
-            self.verify_groups(edl)
+            self.phase("inputs", "reading the video: speech with word timings, cuts, silences, loudness")
+            with self.stage("inputs"):
+                self.load_inputs()
+            inp = self.inp
+            self.event("info", f"{inp.duration:.0f} s, {len(inp.words)} words ({inp.language}), {len(inp.scene_cuts)} cuts, music={inp.has_music}, "
+                               f"loudness {inp.lufs if inp.lufs is not None else '?'} LUFS")
+            auto = defaults.build(inp, self.analysis, self.style())
+            st["decisions"] = auto.notes
+            for n in auto.notes:
+                self.event("decision", n["text"], area=n["area"])
+            self.phase("planning", "planning the edit (the planner runs while the baseline and faces are prepared)")
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                f_plan = pool.submit(self._plan)
+                f_faces = pool.submit(self.load_faces)
+                f_base = pool.submit(self._baseline)
+                if inp.has_music and inp.has_speech and not inp.music_driven:
+                    self._stems_future = pool.submit(self._start_stems)
+                res = f_plan.result()
+                f_faces.result()
+                v, mnotes = planner.merge_auto(res.edl, auto.ops, inp)
+                st["notes"] += res.notes + [n["text"] for n in mnotes]
+                edl = v.edl
+                st["edl"] = edl.model_dump()
+                st["manual_tips"] = [t.model_dump() for t in edl.manual_tips]
+                st["dropped_ops"] = res.validation.dropped + v.dropped
+                self.event("plan", f"{len(edl.ops)} changes planned ({len(auto.ops)} by the system, {len(edl.ops) - len(auto.ops)} by the planner), "
+                                   f"{len(edl.manual_tips)} manual tips", ops=len(edl.ops), tips=len(edl.manual_tips))
+                base = f_base.result()
+                self.verify_bundles(edl, base, pool)
         except CostCapExceeded as e:
             st["status"], st["error"] = "stopped", str(e)
             self.event("error", f"stopped: {e}")
@@ -196,113 +274,263 @@ class Runner:
             self.close()
         return st
 
+    def _plan(self):
+        with self.stage("plan"):
+            t0 = time.time()
+            res = planner.plan(self.analysis, self.inp, self.llm, self.state["preset"])
+            self.state["timing"]["plan_s"] = round(time.time() - t0, 1)
+            return res
+
+    def _baseline(self):
+        """The 9:16 conversion without edits, as a proxy: the 'before' for the critic and the objective comparisons."""
+        with self.stage("baseline"):
+            e = EDL(ops=[], style=self.style())
+            path, rr, key = self.render_set(e, set(), "base", proxy=True)
+            m = verify.measure(path)
+            self.state["baseline"] = {"metrics": m}
+            self.event("info", "baseline ready")
+            return path, m
+
     def _log_line(self):
         st, c = self.state, self.meter.by_service()
-        groups = st.get("groups", {})
         ops = (st.get("edl") or {}).get("ops", [])
         log.info("[AutoEdit] edit analysis=%s status=%s ops_planned=%d ops_kept=%d ops_reverted=%d cost=$%.4f spark=$%.4f wonder=$%.4f modal=$%.4f "
                  "total_s=%.1f render_s=%.1f", self.aid, st["status"], len(ops), sum(1 for o in ops if o.get("enabled")),
                  sum(1 for o in ops if not o.get("enabled")), self.meter.total, c.get("spark", {}).get("usd", 0), c.get("wonder", {}).get("usd", 0),
                  c.get("modal", {}).get("usd", 0), st["timing"].get("total_s", 0), st["timing"].get("render_s", 0))
 
-    def verify_groups(self, edl: EDL):
-        st = self.state
-        inp = self.inp
+    # ------------------------------------------------------------------ verification
+    def _proxy(self, edl: EDL, groups: set[str], tag: str) -> dict:
+        path, rr, key = self.render_set(edl, groups, tag, proxy=True)
+        if rr is None:
+            rr = _replay(edl, self.inp, groups, self.faces, self.work / f"replay_{tag}")
+        return {"path": path, "rr": rr, "m": verify.measure(path)}
+
+    def verify_bundles(self, edl: EDL, base: tuple[Path, dict], pool: ThreadPoolExecutor):
+        st, inp = self.state, self.inp
+        base_path, base_m = base
         by_group = ops_by_group(edl)
-        base_edl = copy.deepcopy(edl)
-        self.phase("baseline", "preparing the baseline (9:16 without edits)")
-        base_path, base_rr, base_key = self.render_set(base_edl, set(), "base")
-        base_m = verify.measure(base_path)
-        st["baseline"] = {"metrics": base_m}
-        self.event("info", "baseline ready")
-        kept: set[str] = set()
-        cur_path, cur_m, cur_words = base_path, base_m, inp.words
-        cur_rr = base_rr
-        any_kept = False
+        bundles = [g for g in GROUPS if any(o.enabled for o in by_group.get(g, []))]
         for g in GROUPS:
             ops = by_group.get(g) or []
             if not ops:
                 continue
-            gs = st["groups"][g] = {"label": GROUP_LABEL[g], "status": "running", "ops": [o.id for o in ops], "reasons": [], "target": _target(ops)}
-            self.phase(f"render:{g}", f"rendering group: {GROUP_LABEL[g]}")
-            try:
-                cand_path, rr, key = self.render_set(edl, kept | {g}, g)
-                if rr is None:  # cached render: recompute the retimed pieces (cheap, no ffmpeg)
-                    rr = _replay(edl, inp, kept | {g}, self.faces, self.work / f'replay_{g}')
-                cand_m = verify.measure(cand_path)
-                asr_after = self._asr(cand_path)
-                self.phase(f"verify:{g}", f"verifying group: {GROUP_LABEL[g]}")
-                obj = verify.objective_checks(g, cur_m, cand_m, rr, edl, inp, self.work / f"geo_{g}", asr_words=asr_after, faces=self.faces)
-                gs.update({"objective": obj, "metrics_before": cur_m, "metrics_after": cand_m, "notes": rr.notes})
-                self.save()
-                failures = [f"{c['name']} ({c['detail']})" for c in obj["checks"] if not c["ok"]]
-                scores = critic = None
-                if obj["ok"]:
-                    ops_json = [o.model_dump() for o in ops]
-                    with ThreadPoolExecutor(max_workers=2) as pool:  # the re-score (Spark) and the critic (Wonder) are independent
-                        f_score = pool.submit(verify.rescore_pair, cur_path, cand_path, cur_m, cand_m, cur_words, asr_after or [], self.analysis, self.llm, self.work, g)
-                        f_critic = pool.submit(verify.critique, cur_path, cand_path, g, ops_json, self.llm, self.work, g)
-                        errs = []
-                        try:
-                            scores = f_score.result()
-                        except CostCapExceeded:
-                            raise
-                        except Exception as e:  # a failed re-score means the group cannot be verified: it is reverted below
-                            errs.append(f"the AI re-score failed ({type(e).__name__}: {str(e)[:100]})")
-                        critic = f_critic.result()
-                    if scores:
-                        self.event("score", f"AI-estimated re-score for {GROUP_LABEL[g]}: " + _score_line(scores, gs["target"]), group=g)
-                    for m in errs:
-                        self.event("info", m, group=g)
-                    self.event("critic", f"critic ({critic['mode']}): {critic['verdict']}", group=g)
-                else:
-                    self.event("verify", f"objective checks failed for {GROUP_LABEL[g]}; no AI calls spent on it", group=g)
-                gs.update({"scores": scores, "critic": critic})
-                dec = verify.decide(g, gs["target"], scores, obj["ok"], failures, critic)
-                gs["reasons"] = dec["reasons"]
-                if dec["keep"]:
-                    gs["status"] = "kept"
-                    kept.add(g)
-                    cur_path, cur_m, cur_words, cur_rr, any_kept = cand_path, cand_m, asr_after or cur_words, rr, True
-                    self.event("kept", f"kept {GROUP_LABEL[g]}: " + "; ".join(dec["reasons"]), group=g)
-                else:
-                    gs["status"] = "reverted"
-                    self.event("reverted", f"reverted {GROUP_LABEL[g]}: " + "; ".join(dec["reasons"]), group=g)
-            except CostCapExceeded:
-                gs["status"] = "skipped"
-                gs["reasons"] = ["the cost cap was reached before this group could be verified"]
-                raise
-            except Exception as e:
-                log.exception("[AutoEdit] group %s failed", g)
-                gs["status"] = "reverted"
-                gs["reasons"] = [f"could not be rendered or verified ({type(e).__name__}: {str(e)[:120]})"]
-                self.event("reverted", f"reverted {GROUP_LABEL[g]}: {gs['reasons'][0]}", group=g)
-            finally:
-                self.save()
-        # final = the last kept state
+            on = any(o.enabled for o in ops)
+            st["groups"][g] = {"label": GROUP_LABEL[g], "risk": RISK[g], "status": "pending" if on else "off", "ops": [o.id for o in ops],
+                               "reasons": [] if on else [n["text"] for n in st.get("decisions", []) if n["area"] == "captions"] or ["off by default"],
+                               "target": DEFAULT_TARGET[g]}
+        pruned = self._prune_unclean_cuts(edl)
+        if pruned:
+            by_group = ops_by_group(edl)
+            bundles = [g for g in GROUPS if any(o.enabled for o in by_group.get(g, []))]
+            for g in GROUPS:
+                gs = st["groups"].get(g)
+                if gs and not any(o.enabled for o in by_group.get(g, [])):
+                    why = [st["op_reverts"][o.id] for o in by_group.get(g, []) if o.id in st.get("op_reverts", {})]
+                    gs.update({"status": "reverted" if why else gs["status"], "reasons": why or gs["reasons"]})
+        self.save()
+        every = set(bundles)
+        if not bundles:
+            self.event("info", "no changes are needed for this video")
+            self._conclude(edl, set(), base, None, pool)
+            return
+
+        # 1. proxies: one per bundle and one with everything, in parallel
+        self.phase("proxies", f"rendering {len(bundles) + (1 if len(bundles) > 1 else 0)} verification previews (540x960) in parallel")
+        with self.stage("proxies"):
+            futs = {g: pool.submit(self._proxy, edl, {g}, g) for g in bundles}
+            f_all = pool.submit(self._proxy, edl, every, "all") if len(bundles) > 1 else None
+            prox = {g: f.result() for g, f in futs.items()}
+            allp = f_all.result() if f_all else prox[bundles[0]]
+
+        # 2. objective checks per bundle || ONE critic call on the everything-proxy
+        self.phase("verify", "checking each change with tools, and asking the critic to watch the result")
+        crit_bundles = [{"id": g, "risk": RISK[g], "ops": [o.model_dump() for o in by_group[g] if o.enabled]} for g in bundles]
+
+        def critic_call():
+            with self.stage("critic"):
+                return verify.critique_all(base_path, allp["path"], crit_bundles, self.llm, self.work, "edit")
+
+        f_critic = pool.submit(critic_call)
+        f_obj = {g: pool.submit(self._objective, g, edl, base_m, prox[g]) for g in bundles}
+        obj = {g: f.result() for g, f in f_obj.items()}
+        critic = f_critic.result()
+        st["critic"] = {"mode": critic.get("mode"), "verdict": critic.get("verdict"), "notes": critic.get("notes")}
+        self.event("critic", f"critic ({critic.get('mode')}): " + (critic.get("notes") or critic.get("verdict", "")), mode=critic.get("mode"))
+
+        # 3. keep or revert each bundle. A cut bundle the critic only faults at a few moments loses just those cuts.
+        partial = self._cull_faulty_cuts(edl, critic, allp, by_group)
+        kept: set[str] = set()
+        for g in bundles:
+            o = obj[g]
+            failures = [f"{c['name']} ({c['detail']})" for c in o["checks"] if not c["ok"] and not c.get("warn")]
+            dec = verify.decide_bundle(g, o["ok"], failures, critic)
+            applied = set(prox[g]["rr"].ops_applied)
+            nothing = not any(op.id in applied for op in by_group[g] if op.enabled)
+            if nothing:   # e.g. every zoom was skipped because the face fills the frame: "kept" would be a lie
+                dec = {"keep": False, "risk": RISK[g], "reasons": ["nothing was applied: " + ("; ".join(prox[g]["rr"].notes) or "every change in this group was skipped")]}
+            gs = st["groups"][g]
+            gs.update({"objective": o, "metrics_after": prox[g]["m"], "notes": prox[g]["rr"].notes, "reasons": dec["reasons"],
+                       "critic": (critic.get("bundles") or {}).get(g), "status": "kept" if dec["keep"] else ("skipped" if nothing else "reverted")})
+            if dec["keep"]:
+                kept.add(g)
+                if g in partial:
+                    gs["reasons"] = gs["reasons"] + [f"partly kept: {len(partial[g])} cut(s) were reverted on their own because the critic found a defect at them"]
+            self.event("kept" if dec["keep"] else "reverted", f"{'kept' if dec['keep'] else 'reverted'} {GROUP_LABEL[g]} ({RISK[g]}): " + "; ".join(gs["reasons"]), group=g)
+        self._conclude(edl, kept, base, (allp if kept == every and not partial else None), pool, prox=prox)
+
+    def _cull_faulty_cuts(self, edl: EDL, critic: dict, allp: dict, by_group: dict) -> dict[str, list[str]]:
+        """For a bundle of cuts (pacing, rhythm) whose major critic defects all carry a time in the edited video: find the cut whose join in
+        the edit is nearest to each defect (within 2 s), switch only those cuts off, and treat the remaining cuts as passing the critic.
+        The remaining cuts were in the video the critic watched, and it faulted nothing else, but they are not watched again as a set."""
+        from app.studio.autoedit.edl import removal_ranges
+        done: dict[str, list[str]] = {}
+        if critic.get("verdict") != "ok":
+            return done
+        tl = allp["rr"].timeline
+        for g in ("pacing", "rhythm"):
+            entry = (critic.get("bundles") or {}).get(g)
+            ops = [o for o in by_group.get(g, []) if o.enabled and o.type in ("trim", "cut_segment", "remove_filler")]
+            major = [d for d in (entry or {}).get("defects", []) if d["severity"] == "major"]
+            if not entry or not major or len(ops) < 2 or any(d.get("at_s") is None for d in major):
+                continue
+            joins = {}
+            for o in ops:
+                for lo, hi in removal_ranges([o], self.inp):
+                    t = tl.map_time(hi + 0.02)
+                    if t is not None:
+                        joins.setdefault(o.id, []).append(t)
+            culprits: dict[str, dict] = {}
+            for d in major:
+                best = min(((abs(t - d["at_s"]), oid) for oid, ts in joins.items() for t in ts), default=None)
+                if best is None or best[0] > 2.0:
+                    culprits = {}
+                    break
+                culprits[best[1]] = d
+            if not culprits or len(culprits) >= len(ops):
+                continue
+            for o in ops:
+                if o.id in culprits:
+                    o.enabled = False
+                    d = culprits[o.id]
+                    self.state.setdefault("op_reverts", {})[o.id] = f"the critic found a defect at this cut: {d['flag']}: {d['detail']}"
+            entry["defects"] = [d for d in entry["defects"] if d not in culprits.values()]
+            if entry["verdict"] == "reject":
+                entry["verdict"] = "approve"
+            done[g] = list(culprits)
+            where = ", ".join("%.0f s" % d["at_s"] for d in culprits.values())
+            self.event("info", f"{GROUP_LABEL[g]}: reverted {len(culprits)} of {len(ops)} cuts individually (critic defects at {where})")
+        return done
+
+    def _prune_unclean_cuts(self, edl: EDL) -> list[str]:
+        """The 'every cut sits between words' rule, applied BEFORE rendering: a cut whose edge would land inside a word the recogniser heard
+        (so a piece of the word would be left, or a word clipped) is switched off on its own, with the reason, instead of failing the
+        whole bundle later. Pure arithmetic on the timeline, no rendering."""
+        from types import SimpleNamespace
+        from app.studio.autoedit.edl import removal_ranges, REMOVING
+        dropped: list[str] = []
+        for o in edl.ops:   # a removal too short to cut cleanly (a filler squeezed between two words) would change nothing: say so, do not call it "kept"
+            if o.enabled and o.type in REMOVING and o.group in ("pacing", "rhythm") and not removal_ranges([o], self.inp):
+                o.enabled = False
+                why = "left uncut: too short to cut cleanly (the neighbouring words are right next to it, so a clean cut would leave a piece of the word)"
+                self.state.setdefault("op_reverts", {})[o.id] = why
+                dropped.append(o.id)
+                self.event("info", f"{o.id}: {why}")
+        for _ in range(8):
+            pc = executor.plan_pieces(edl, self.inp, {"pacing", "rhythm"}, self.faces)
+            wg = verify.cuts_on_word_gaps(SimpleNamespace(timeline=pc.timeline), self.inp.words, self.inp.silences)
+            if wg["ok"]:
+                break
+            bad = wg["mid_word_cuts"][0]
+            culprit = None
+            for o in edl.ops:
+                if o.enabled and o.type in REMOVING and o.group in ("pacing", "rhythm"):
+                    if any(abs(lo - bad["t"]) < 0.08 or abs(hi - bad["t"]) < 0.08 for lo, hi in removal_ranges([o], self.inp)):
+                        culprit = o
+                        break
+            if culprit is None:
+                break
+            culprit.enabled = False
+            why = f"left uncut: the edge of this cut would land inside the word \"{bad['word']}\" at {bad['t']:.2f} s (the recogniser's word timing is not precise enough to cut there safely)"
+            self.state.setdefault("op_reverts", {})[culprit.id] = why
+            dropped.append(culprit.id)
+            self.event("info", f"{culprit.id}: {why}")
+        return dropped
+
+    def _objective(self, g: str, edl: EDL, base_m: dict, px: dict) -> dict:
+        asr = self._asr(px["path"]) if (g == "captions" and px["rr"].caption_words) else None
+        return verify.objective_checks(g, base_m, px["m"], px["rr"], edl, self.inp, self.work / f"geo_{g}", asr_words=asr, faces=self.faces, video=px["path"])
+
+    def _conclude(self, edl: EDL, kept: set[str], base: tuple[Path, dict], kept_proxy: dict | None, pool: ThreadPoolExecutor, prox: dict | None = None):
+        """Render the creator's file once from the kept ops; in parallel, the combined-edit checks and the informational AI re-score."""
+        st, inp = self.state, self.inp
+        base_path, base_m = base
         for o in edl.ops:
-            o.enabled = o.group in kept
+            o.enabled = o.enabled and o.group in kept
         st["edl"] = edl.model_dump()
-        self.finalise(edl, cur_path, cur_m, base_path, base_m, any_kept)
+        self.phase("finalising", "rendering the final video once at full resolution")
+        with self.stage("final"):
+            f_final = pool.submit(self.render_set, edl, kept, "final")
+            if kept and kept_proxy is None:  # a subset of the bundles was kept: its preview does not exist yet
+                kept_proxy = self._proxy(edl, kept, "kept")
+            f_sync = pool.submit(self._combined_sync, edl, kept, kept_proxy) if ("captions" in kept and len(kept) > 1 and kept_proxy) else None
+            f_score = pool.submit(self._overall_score, base_path, base_m, kept_proxy, edl, kept) if kept and kept_proxy else None
+            final_path, _rr, _key = f_final.result()
+            overall = f_score.result() if f_score else None
+            sync = f_sync.result() if f_sync else None
+        if sync is not None and not sync["ok"]:  # the captions drifted once combined with the cuts: drop them, say why, render again
+            gs = st["groups"]["captions"]
+            gs["status"], gs["reasons"] = "reverted", [f"captions went out of sync after the cuts were applied ({sync['detail']}): turned off"]
+            self.event("reverted", f"reverted Captions: {gs['reasons'][0]}", group="captions")
+            kept.discard("captions")
+            for o in edl.ops:
+                o.enabled = o.enabled and o.group in kept
+            st["edl"] = edl.model_dump()
+            final_path, _rr, _key = self.render_set(edl, kept, "final2")
+        with self.stage("final_checks"):
+            final_m = verify.measure(final_path, light=True)
+        if (final_m["width"], final_m["height"]) != (config.OUT_W, config.OUT_H):
+            raise RuntimeError(f"the final render is {final_m['width']}x{final_m['height']}, expected {config.OUT_W}x{config.OUT_H}")
+        self.finalise(edl, final_path, final_m, base_m, overall, bool(kept))
+
+    def _combined_sync(self, edl: EDL, kept: set[str], px: dict) -> dict:
+        asr = self._asr(px["path"])
+        sync = verify.caption_sync(px["rr"].caption_words, asr or [])
+        if not sync or sync.get("median_offset_ms") is None:
+            return {"ok": True, "detail": "not enough matched words to measure"}
+        return {"ok": abs(sync["median_offset_ms"]) <= 150, "detail": f"{sync['median_offset_ms']} ms over {sync['matched_words']} words"}
+
+    def _overall_score(self, base_path: Path, base_m: dict, px: dict, edl: EDL, kept: set[str]) -> dict | None:
+        """One informational AI re-score of the original vs the edit (never a veto; labelled AI-estimated and noisy)."""
+        try:
+            with self.stage("rescore"):
+                after_words = [{"word": w["word"], "start": w["start"], "end": w["end"]} for w in surviving_words(px["rr"].timeline, self.inp.words)]
+                overall = verify.rescore_pair(base_path, px["path"], base_m, px["m"], self.inp.words, after_words, self.analysis, self.llm, self.work, "overall")
+            self.event("score", "AI-estimated re-score (informational only): " + _score_line(overall, None))
+            return overall
+        except CostCapExceeded:
+            raise
+        except Exception as e:
+            self.event("info", f"the informational AI re-score was not available ({str(e)[:80]})")
+            return None
 
     def _finalise_partial(self):
-        """Cost cap hit mid-run: groups verified so far stay, everything else is off."""
+        """Cost cap hit mid-run: nothing was verified, so only the baseline conversion is delivered."""
         st = self.state
         edl = EDL.model_validate(st["edl"])
-        kept = {g for g, v in st["groups"].items() if v.get("status") == "kept"}
         for o in edl.ops:
-            o.enabled = o.group in kept
+            o.enabled = False
         st["edl"] = edl.model_dump()
         try:
             self._fetch_original()
-            path, _, _ = self.render_set(edl, kept, "final")
-            m = verify.measure(path)
-            self.finalise(edl, path, m, None, (st.get("baseline") or {}).get("metrics"), bool(kept), partial=True)
+            path, _, _ = self.render_set(edl, set(), "final")
+            m = verify.measure(path, light=True)
+            self.finalise(edl, path, m, (st.get("baseline") or {}).get("metrics"), None, False, partial=True)
         except Exception as e:
             log.warning("[AutoEdit] partial finalise failed: %s", e)
 
     def _asr(self, path: Path) -> list[dict] | None:
-        """A fresh word-level transcript of the edited audio (about $0.0005): what the re-score sees and the caption-sync check uses."""
+        """A fresh word-level transcript of the edited audio (about $0.0005): the caption-sync check compares against it."""
         if not self.inp.has_audio:
             return None
         try:
@@ -315,14 +543,13 @@ class Runner:
             log.info("[AutoEdit] ASR of edit failed: %s", e)
             return None
 
-    def finalise(self, edl: EDL, final_path: Path, final_m: dict, base_path: Path | None, base_m: dict | None, any_kept: bool, partial: bool = False):
+    def finalise(self, edl: EDL, final_path: Path, final_m: dict, base_m: dict | None, overall: dict | None, any_kept: bool, partial: bool = False):
         st = self.state
-        self.phase("finalising", "saving the result")
         fkey = edit_prefix(self.aid) + "final.mp4"
         self.storage.put_file(fkey, final_path, "video/mp4")
         enabled = {g for g in GROUPS if any(o.enabled and o.group == g for o in edl.ops)}
         rr = _replay(edl, self.inp, enabled, self.faces)
-        style = edl.style
+        style = rr.style or edl.style
         if rr.caption_words:
             self.storage.put_bytes(edit_prefix(self.aid) + "captions.srt", captions.to_srt(rr.caption_words, style).encode("utf-8"), "text/plain")
         ass_text = captions.build_ass(rr.caption_words, rr.overlays, style, rr.duration, with_captions=bool(rr.caption_words))
@@ -334,16 +561,6 @@ class Runner:
             self.storage.put_file(edit_prefix(self.aid) + "cover.jpg", cov, "image/jpeg")
         except Exception as e:  # a cover is a nicety
             log.info("[AutoEdit] cover not made: %s", e)
-        overall = None
-        if any_kept and base_path is not None and not partial:
-            try:
-                after_words = self._asr(final_path) or self.inp.words
-                overall = verify.rescore_pair(base_path, final_path, base_m, final_m, self.inp.words, after_words, self.analysis, self.llm, self.work, "overall")
-                self.event("score", "overall AI-estimated re-score: " + _score_line(overall, None))
-            except CostCapExceeded:
-                raise
-            except Exception as e:
-                self.event("info", f"overall re-score unavailable ({str(e)[:80]})")
         st["final"] = {"key": fkey, "metrics": final_m, "overall_scores": overall, "partial": partial, "duration_s": final_m.get("duration_s"),
                        "has_captions": bool(rr.caption_words), "has_overlays": bool(rr.overlays), "style": style}
         st["baseline"] = {**(st.get("baseline") or {}), "metrics": base_m}
@@ -357,6 +574,7 @@ class Runner:
             st["status"] = "running"
             self.phase("rendering", f"re-rendering: {summary}")
             self.load_inputs()
+            self.load_faces()
             edl = self.edl()
             enabled = {g for g in GROUPS if any(o.enabled and o.group == g for o in edl.ops)}
             path, rr, key = self.render_set(edl, enabled, "re")
@@ -367,9 +585,9 @@ class Runner:
             asr = self._asr(path)
             checks = []
             for g in sorted(enabled):
-                o = verify.objective_checks(g, (st.get("baseline") or {}).get("metrics") or m, m, rr, edl, self.inp, self.work / f"geo_{g}", asr_words=asr, faces=self.faces)
+                o = verify.objective_checks(g, (st.get("baseline") or {}).get("metrics") or m, m, rr, edl, self.inp, self.work / f"geo_{g}", asr_words=asr, faces=self.faces, video=path)
                 checks += [{"group": g, **c} for c in o["checks"]]
-            self.finalise(edl, path, m, None, (st.get("baseline") or {}).get("metrics"), False)
+            self.finalise(edl, path, m, (st.get("baseline") or {}).get("metrics"), None, False)
             st["final"]["objective_checks"] = checks
             st["final"]["not_rescored"] = True
             st["final"]["summary"] = summary
@@ -424,6 +642,6 @@ def _replay(edl: EDL, inp: inputs_mod.Inputs, groups: set[str], faces: list[dict
     if work is not None and (pc.words or pc.overlays):
         work.mkdir(parents=True, exist_ok=True)
         ass_path = work / "captions.ass"
-        ass_path.write_text(captions.build_ass(pc.words, pc.overlays, edl.style, pc.timeline.duration, with_captions=bool(pc.words)), encoding="utf-8")
+        ass_path.write_text(captions.build_ass(pc.words, pc.overlays, pc.style, pc.timeline.duration, with_captions=bool(pc.words)), encoding="utf-8")
     return executor.RenderResult(path=Path("."), duration=pc.timeline.duration, timeline=pc.timeline, overlays=pc.overlays, caption_words=pc.words,
-                                 zooms=pc.zooms, ass_path=ass_path, notes=pc.notes, ops_applied=pc.applied)
+                                 zooms=pc.zooms, ass_path=ass_path, notes=pc.notes, ops_applied=pc.applied, style=pc.style)

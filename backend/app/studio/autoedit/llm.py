@@ -80,10 +80,12 @@ class EditLLM:
         self.client = client or MetaClient()
 
     # -- low level
-    def chat(self, content: list, model: str, max_tokens: int, label: str, est_in_tokens: int = 4000) -> dict:
+    def chat(self, content: list, model: str, max_tokens: int, label: str, est_in_tokens: int = 4000, reasoning_effort: str | None = None) -> dict:
         pin, pout = studio_config.price_per_m(model)
         self.meter.check((est_in_tokens * pin + 0.4 * max_tokens * pout) / 1e6)
         body = {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": max_tokens}
+        if reasoning_effort:  # accepted by the Meta API: less hidden reasoning = a faster, cheaper call
+            body["reasoning_effort"] = reasoning_effort
         start = time.time()
 
         def call():
@@ -105,13 +107,13 @@ class EditLLM:
 
     # -- helpers
     def json_call(self, prompt: str, model: str, label: str, *, max_tokens: int = 12000, images: list[bytes] | None = None,
-                  videos: list[Path] | None = None, est_in_tokens: int = 4000) -> dict:
+                  videos: list[Path] | None = None, est_in_tokens: int = 4000, reasoning_effort: str | None = None) -> dict:
         content: list = [{"type": "text", "text": prompt}]
         for img in images or []:
             content.append({"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(img).decode()}})
         for v in videos or []:
             content.append({"type": "video_url", "video_url": {"url": "data:video/mp4;base64," + base64.b64encode(Path(v).read_bytes()).decode()}})
-        r = self.chat(content, model, max_tokens, label, est_in_tokens)
+        r = self.chat(content, model, max_tokens, label, est_in_tokens, reasoning_effort)
         try:
             return parse_json(r["text"])
         except ValueError as e:

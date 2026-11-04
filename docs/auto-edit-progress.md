@@ -59,3 +59,52 @@ First live run (saree, `clean`): 6 ops planned, audio group kept (ducking + loud
 | manual tips | 28 | 12 | 8 |
 
 Overall AI-estimated re-score (before -> after): dance Hook 58->78, On-Screen Text 22->78 (but also Audio 60->82 with no audio change: noise); 291 Hook 55->68, On-Screen Text 60->78; saree no change. The samples were already loudness-normalised (-14 LUFS), so loudnorm had nothing to gain and was correctly reverted.
+
+
+## Round 2: keep what helps, and make it fast (done)
+
+Goal: the first round kept 1 of 5-7 planned changes per video (the output looked like the original), took 5-7 minutes, and the AI re-score
+(noisy: "Audio +22" with no audio change) was the main veto. Changes:
+
+1. **Keep policy.** Ops belong to bundles by type. SAFE (hook, pacing = real silence + clear fillers, captions, audio = loudness/denoise) are kept when the objective checks pass and the critic reports no major defect. RISKY (zoom, label/CTA text, cuts that remove speech or follow the beat, ducking + sound effects) need an explicit critic approval and no failed check. The AI re-score is informational only. A cut bundle the critic faults at one moment loses only that cut. Every change shows its reason; reverted RISKY ones are toggles.
+2. **Captions** are added by the system for any video with speech (English / Hindi / Hinglish), retimed after cuts, sync-checked, kept off the face; left off with a visible reason when the creator already has text (60 %+ of frames) or there is no speech.
+3. **Speed.** `reasoning_effort=low` for planner and critic, the system adds the measurable SAFE ops itself (so the planner plans less), planner / faces / baseline / Demucs in parallel, 540x960 previews rendered in parallel (one per bundle + one with everything), ONE critic call, one overall re-score overlapped with the single full-size render.
+4. **Robustness found while testing** (each has a test): cuts are exact where the signal is silent (word times across held or sung words are unreliable); a cut that would land inside a recognised word or is too short to cut cleanly is dropped before rendering instead of failing a whole bundle; widening a cut to word edges is capped at 0.6 s (a 1.9 s cut had become 8 s); captions chunks no longer overlap (libass stacked them and pushed one up); a bundle where every change was skipped is "skipped", not "kept"; audio shorter than the picture is padded; the A/V-length check is relative to the source; frozen-picture check by total duration; noise floor only from measured silences (music is not noise); the recogniser gets a levelled, de-noised copy of a quiet or noisy recording; hook text with no known face goes to the top band.
+
+### Timings (seconds, end to end through the API, real models)
+
+| | saree 37 s | dance 22 s | Video-291 51 s | raw talk (TTS) 31 s | degraded 291 54 s |
+|---|---|---|---|---|---|
+| before (round 1) | 409 | 307 | 382 | n/a | n/a |
+| after (round 2) | 103 | 85 | 43 | 65 | 107 |
+| of which planner | 102 -> 31 | 90 -> 26 | 67 -> 18 | 17 | 21 |
+| critic | 4 calls, 131 s -> 1 call, 21 s | 4 calls, 90 s -> 15 s | 4 calls, 150 s -> 10 s | 16 | 28 |
+| previews / full-size render | 17-24 / 28 | 8 / 10 | 3 / 10 | 16 / 16 | 32 / 26 |
+| cost | $0.43 -> $0.13 | $0.31 -> $0.08 | $0.46 -> $0.12 | $0.10 | $0.14 |
+
+(The 150 s target for a 45 s video is met with a wide margin; the slowest, the 54 s degraded clip at 107 s, is dominated by 7 previews rendering at once and a 28 s critic. Timings vary by ±15 s between runs: the model calls are the noisy part.)
+
+### Kept / reverted per video (round 2, same API, final run)
+
+| Video | kept | reverted or off, and why |
+|---|---|---|
+| saree (English, creator's own captions) | loudness (-14.2 -> -13.8 LUFS, peak -0.9 -> -1.5), a cut of the unclear tail (36.7 -> 33.9 s, RISKY, critic approved), ducking + sfx | captions off (83 % of frames show the creator's text); label/CTA text (critic: duplicates the creator's own CTA); zoom (skipped: the face fills the frame) |
+| dance (sideways source, 2 words) | hook text, label text, 2 zoom punches, ducking | no captions (2 words); one cut left uncut (edge inside a word) |
+| Video-291 (Hindi, creator's own lyrics burned in) | 3 zoom punches | captions off (100 % of frames show text); loudness left alone (already -14.1); hook text reverted (critic: repeats the creator's own line) |
+| raw talk (TTS speech + noise, -25.6 LUFS, 46 % silence) | hook text, 2 silence cuts (30.6 -> 27.3 s), captions (60 words, median offset 20 ms), loudness + denoise (-25.7 -> -14.1 LUFS, peak -13.1 -> -1.7), 3 zoom punches | label text (critic: repeats the caption); 3 filler cuts left uncut (recogniser times too imprecise or too short) |
+| degraded 291 (-29.1 LUFS, noise, 12 % silence, 2 inserted 1.5 s silences, no text) | hook text, silence cuts (54.4 -> 48.7 s, silence 12 % -> 0 %), loudness + denoise (-29.2 -> -14.0 LUFS, peak -17.8 -> -1.5), label text, zoom | captions (critic: the recogniser misses much of the sung chorus and garbles the end) |
+
+`~/Desktop/raw_test.mp4` does not exist on this machine, so the raw-footage test used two generated clips (in `samples/inputs_degraded/`, untracked): the degraded copy above and a spoken clip made with macOS `say` (um / uh fillers, 1.2-2 s pauses, noise bed, -25.6 LUFS) over the same footage. They are synthetic: the picture is a musician, not a speaker.
+
+### Output review (frames, ASS file, objective checks)
+* Caption sync on the raw talk: median offset 20 ms over 58 words; captions inside the safe area; after the overlap fix every chunk sits at the same height.
+* Clicks at cuts: no spikes at any join (3 joins on the degraded clip, 2 on the raw talk).
+* Zoom: all faces stayed inside the crop (analytic check); a zoom is skipped or reduced when the face is large.
+* Text over the face: overlays moved off the face where one was detected; in the sideways dance sample no face is detected at the start, so the hook text now defaults to the top band (checked on a frame).
+
+### Honest remaining problems
+* Fillers are the weak spot: all 3 TTS fillers were refused (the recogniser's word times abut their neighbours), so filler removal rarely fires on clean TTS-like speech. Real footage with natural gaps should do better; not tested on a real talking head.
+* A recogniser that cannot hear a sung chorus gives partial captions; the critic catches it and the bundle is reverted, but there is then no caption at all.
+* The critic is one model's opinion (and cannot hear in frame-strip fallback); on 4 of 5 videos it only flagged duplicated text. Its per-moment times are used to drop single cuts; the remaining cuts are not watched again as a set.
+* Cuts that remove speech are RISKY: the saree's tail cut (6 s of the closing call to action area) was approved by the critic; a creator may still prefer to keep it (toggle).
+* Spend this round (Meta): about $3.5 including two analyses (~$0.7), ~20 edit runs ($0.08-0.17 each) and probes; Modal about $0.05 (Demucs ~$0.005 per music edit).

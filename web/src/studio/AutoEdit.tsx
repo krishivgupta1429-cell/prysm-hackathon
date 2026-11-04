@@ -8,8 +8,8 @@ import type { CSSProperties } from 'react'
 import { apiUrl } from '@/lib/api'
 import { getToken } from '@/lib/auth'
 
-type Change = { id: string; type: string; group: string; label: string; reason: string; target_parameter: string; enabled: boolean; verdict: string; verdict_reasons: string[]; user_override: boolean }
-type Group = { label: string; status: string; reasons: string[]; target: string; scores?: { before: Record<string, number>; after: Record<string, number>; label?: string } | null; critic?: { verdict: string; reasons: string[]; flags: { flag: string; detail?: string }[]; mode: string } | null; metrics_before?: Metrics; metrics_after?: Metrics; objective?: { checks: { name: string; ok: boolean; detail: string }[]; ok: boolean } }
+type Change = { id: string; type: string; group: string; label: string; reason: string; target_parameter: string; enabled: boolean; verdict: string; verdict_reasons: string[]; user_override: boolean; risk?: string }
+type Group = { label: string; status: string; risk?: string; reasons: string[]; target: string; critic?: { verdict: string; reasons: string[]; defects: { flag: string; severity: string; detail?: string }[] } | null; metrics_after?: Metrics; objective?: { checks: { name: string; ok: boolean; detail: string; warn?: boolean }[]; ok: boolean } }
 type Metrics = { duration_s?: number; lufs?: number | null; true_peak_db?: number | null; silence_ratio?: number; cut_count?: number; avg_shot_s?: number; black_frames?: number; frozen_frames?: number }
 type Tip = { step_id?: string; parameter: string; tip: string; why_manual?: string }
 type State = {
@@ -18,6 +18,8 @@ type State = {
   baseline?: { metrics: Metrics } | null
   final?: { metrics: Metrics; overall_scores?: { before: Record<string, number>; after: Record<string, number>; notes?: string } | null; partial?: boolean; not_rescored?: boolean; objective_checks?: { group: string; name: string; ok: boolean; detail: string }[]; has_captions?: boolean } | null
   cost?: { total_usd: number }
+  decisions?: { area: string; text: string }[]; critic?: { mode?: string; verdict?: string; notes?: string } | null
+  timing?: { total_s?: number; stages?: Record<string, number> }
 }
 type Resp = { eligible: boolean; reason: string; state: State | null }
 
@@ -160,6 +162,10 @@ export default function AutoEdit({ analysisId }: { analysisId?: string }) {
           <button style={btn2} onClick={() => download('edl', 'edit-list.json')}>Edit list (JSON)</button>
         </div>
 
+        {(st.decisions || []).length > 0 && <>
+          <h3 style={h3}>What was measured and decided</h3>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>{(st.decisions || []).map((d, i) => <li key={i} style={{ fontSize: 12, lineHeight: 1.5, color: '#525252' }}>{d.text}</li>)}</ul>
+        </>}
         <h3 style={h3}>Changes</h3>
         {st.changes.length === 0 && <p style={muted}>The plan had no changes that Prysm can make automatically. See the manual tips below.</p>}
         <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
@@ -169,8 +175,10 @@ export default function AutoEdit({ analysisId }: { analysisId?: string }) {
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, wordBreak: 'break-word' }}>{c.label}</div>
                 <div style={muted}>{c.reason}{c.target_parameter ? ` · ${c.target_parameter}` : ''}</div>
+                {!c.enabled && c.verdict !== 'pending' && <div style={{ ...muted, fontStyle: 'italic' }}>Off. Tick the box to turn it on; it is rendered and checked again.</div>}
                 <div style={{ ...muted, marginTop: 2 }}>
-                  <span style={{ ...tag, color: c.verdict === 'kept' ? '#0a0a0a' : '#737373', borderColor: c.verdict === 'kept' ? '#0a0a0a' : '#d4d4d4' }}>{c.verdict === 'kept' ? 'kept' : c.verdict === 'reverted' ? 'reverted' : c.verdict}</span>
+                  <span style={{ ...tag, color: c.verdict === 'kept' ? '#0a0a0a' : '#737373', borderColor: c.verdict === 'kept' ? '#0a0a0a' : '#d4d4d4' }}>{c.verdict === 'kept' ? 'kept' : c.verdict === 'reverted' ? 'reverted' : c.verdict === 'off' ? 'off by default' : c.verdict}</span>
+                  <span style={{ ...tag, marginLeft: 6 }}>{c.risk === 'safe' ? 'safe fix' : 'taste call'}</span>
                   {c.user_override && <span style={{ ...tag, marginLeft: 6 }}>your choice</span>}
                   <span style={{ marginLeft: 8 }}>{c.verdict_reasons.join(' · ')}</span>
                 </div>
@@ -189,8 +197,8 @@ export default function AutoEdit({ analysisId }: { analysisId?: string }) {
         </form>
         <div style={{ ...muted, marginTop: 6 }}>{st.revisions_left} of 5 requests left. {st.revisions.length > 0 && 'Done: ' + st.revisions.map(r => `“${r.text}”`).join(', ')}</div>
 
-        <h3 style={h3}>Verification <span style={{ ...tag, marginLeft: 6 }}>AI-estimated</span></h3>
-        <p style={{ ...muted, margin: '0 0 8px' }}>Scores are AI estimates from the frames and transcript, not measured viewership. Numbers from tools (loudness, length, silence, cuts) are measured.</p>
+        <h3 style={h3}>Verification</h3>
+        <p style={{ ...muted, margin: '0 0 8px' }}>Safe fixes are kept when the tool checks pass and the critic (an AI that watches both videos) finds no defect. Taste calls (zoom, beat-synced cuts, labels, sound effects) are kept only if the critic also approves. The AI score below is informational and never decides anything.{st.critic?.notes ? ` Critic: ${st.critic.notes}` : ''}{st.timing?.total_s ? ` Took ${Math.round(st.timing.total_s)} s.` : ''}</p>
         {st.final?.not_rescored && <p style={{ ...muted, margin: '0 0 8px' }}>The latest change was re-checked by tools only; the AI re-score below is from the original run.</p>}
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 420 }}>
@@ -204,7 +212,7 @@ export default function AutoEdit({ analysisId }: { analysisId?: string }) {
         </div>
         {overall && (
           <div style={{ overflowX: 'auto', marginTop: 12 }}>
-            <p style={{ ...muted, margin: '0 0 6px' }}>This estimate is noisy (a few points up or down, sometimes more). A change in a parameter the edit did not touch is estimator noise, not an effect of the edit.</p>
+            <p style={{ ...muted, margin: '0 0 6px' }}><span style={{ ...tag, marginRight: 6 }}>AI-estimated</span>Informational only, not measured viewership. This estimate is noisy (a few points up or down, sometimes more): a change in something the edit did not touch is noise.</p>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 420 }}>
               <thead><tr style={{ textAlign: 'left', color: '#737373' }}><th style={{ padding: '6px 4px' }}>Parameter (AI-estimated)</th><th>Before</th><th>After</th><th>Change</th></tr></thead>
               <tbody>
@@ -216,12 +224,13 @@ export default function AutoEdit({ analysisId }: { analysisId?: string }) {
           </div>
         )}
         <details style={{ marginTop: 12 }}>
-          <summary style={{ ...muted, cursor: 'pointer', fontWeight: 600 }}>Checks per group</summary>
+          <summary style={{ ...muted, cursor: 'pointer', fontWeight: 600 }}>Checks per change group</summary>
           {Object.entries(st.groups).map(([g, v]) => (
             <div key={g} style={{ margin: '10px 0' }}>
-              <div style={{ fontSize: 12, fontWeight: 700 }}>{v.label} — {v.status}{v.critic ? ` · critic: ${v.critic.verdict}` : ''}</div>
-              {v.critic?.reasons?.length ? <div style={muted}>Critic: {v.critic.reasons.join(' · ')}</div> : null}
-              {(v.objective?.checks || []).map((c, i) => <div key={i} style={{ ...muted, color: c.ok ? '#525252' : '#b91c1c' }}>{c.ok ? '✓' : '✗'} {c.name}: {c.detail}</div>)}
+              <div style={{ fontSize: 12, fontWeight: 700 }}>{v.label} — {v.status} · {v.risk === 'safe' ? 'safe fix' : 'taste call'}{v.critic ? ` · critic: ${v.critic.verdict}` : ''}</div>
+              <div style={muted}>{(v.reasons || []).join(' · ')}</div>
+              {(v.critic?.defects || []).map((d, i) => <div key={i} style={{ ...muted, color: d.severity === 'major' ? '#b91c1c' : '#737373' }}>Critic ({d.severity}): {d.flag} {d.detail}</div>)}
+              {(v.objective?.checks || []).map((c, i) => <div key={i} style={{ ...muted, color: c.ok ? '#525252' : c.warn ? '#737373' : '#b91c1c' }}>{c.ok ? '✓' : c.warn ? '!' : '✗'} {c.name}: {c.detail}</div>)}
             </div>
           ))}
         </details>
