@@ -4,6 +4,9 @@ import { setToken, setRefreshToken, fetchUser } from '@/lib/auth'
 import { apiUrl } from '@/lib/api'
 import { STUDIO_MODE } from '@/lib/config'
 
+const DEMO_EMAIL = 'demo@theprysm.io'
+const DEMO_PASSWORD = 'Demo@12345'
+
 const VALUE_PROPS = [
   { title: '10-parameter analysis', desc: 'Based on real Instagram ranking signals' },
   { title: 'AI-powered suggestions', desc: 'Step-by-step fixes you can apply in minutes' },
@@ -219,6 +222,19 @@ export default function Login() {
               Don't have an account?{' '}
               <Link to="/register" className="text-foreground/60 hover:text-foreground transition-colors font-medium">Sign up</Link>
             </p>
+
+            {/* A shared demo account for the hackathon judges (two analyses already on it). The password is public on purpose. */}
+            <div className="mt-6 rounded-xl border border-foreground/10 bg-foreground/[0.03] px-4 py-3.5 font-body" data-testid="demo-login">
+              <p className="text-[11px] uppercase tracking-widest text-foreground/50 mb-2">Hackathon demo account</p>
+              <p className="text-sm text-foreground/80">Email: <span className="font-medium select-all">{DEMO_EMAIL}</span></p>
+              <p className="text-sm text-foreground/80">Password: <span className="font-medium select-all">{DEMO_PASSWORD}</span></p>
+              <button
+                type="button" onClick={() => { setEmail(DEMO_EMAIL); setPassword(DEMO_PASSWORD); setError('') }}
+                className="mt-3 text-sm font-medium text-foreground underline underline-offset-2 cursor-pointer hover:opacity-70 transition-opacity"
+              >
+                Fill in the demo login
+              </button>
+            </div>
           </div>
         </div>
       </div>
