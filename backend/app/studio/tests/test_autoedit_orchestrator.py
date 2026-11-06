@@ -314,3 +314,49 @@ def test_a_bundle_whose_every_change_was_skipped_is_reported_as_skipped_not_kept
     z = st["groups"]["zoom"]
     assert z["status"] == "skipped" and "nothing was applied" in z["reasons"][0] and "face fills" in z["reasons"][0]
     assert enabled_ids(st)["o2"] is False
+
+
+# ---- a render that cannot be made must not fail the whole edit
+
+def test_when_the_full_render_fails_even_after_the_retry_the_clean_cut_is_delivered_as_partial(env, monkeypatch):
+    Scripted(monkeypatch)
+    real = ffx.run
+
+    def killed_when_drawing(args, timeout=900):
+        graph = args[args.index("-filter_complex") + 1] if "-filter_complex" in args else ""
+        if "-crf" in args and args[args.index("-crf") + 1] == "18" and "captions.ass" in graph:   # the full-size render with captions / labels
+            raise ffx.FFmpegError("ffmpeg exit -9 (killed by signal 9, probably out of memory): frame= 40")
+        return real(args, timeout=timeout)
+    monkeypatch.setattr(ffx, "run", killed_when_drawing)
+    st, store, _ = run(env)
+    assert st["status"] == "done" and not st.get("error"), st.get("error")
+    fin = st["final"]
+    assert fin["partial"] is True and "clean cut" in fin["note"] and "killed by signal 9" in fin["note"]
+    assert store.exists(fin["key"]) and fin["metrics"]["width"] == 1080 and fin["metrics"]["height"] == 1920
+    assert fin["has_captions"] is False and fin["has_overlays"] is False
+    g = st["groups"]
+    assert g["captions"]["status"] == "reverted" and "failed on the server" in g["captions"]["reasons"][0]
+    assert g["audio"]["status"] == "kept"                                 # the loudness fix is part of the clean cut
+    on = enabled_ids(st)
+    assert on["auto_captions"] is False and on["auto_loudness"] is True
+    assert any(e["kind"] == "error" and "delivering the clean cut" in e["msg"] for e in st["trace"])
+
+
+def test_a_render_that_works_is_not_marked_partial(env, monkeypatch):
+    Scripted(monkeypatch)
+    st, _store, _ = run(env)
+    assert st["final"]["partial"] is False and "note" not in st["final"]
+
+
+def test_a_failed_run_error_starts_with_the_exit_code(env, monkeypatch):
+    Scripted(monkeypatch)
+    real = ffx.run
+
+    def killed(args, timeout=900):
+        if "-crf" in args and args[args.index("-crf") + 1] == "18":
+            raise ffx.FFmpegError("ffmpeg exit -9 (killed by signal 9, probably out of memory): frame= 40 || Stream mapping: " + "x" * 600)
+        return real(args, timeout=timeout)
+    monkeypatch.setattr(ffx, "run", killed)
+    st, _store, _ = run(env)       # even the plain-conversion fallback is killed: nothing more can be delivered
+    assert st["status"] == "failed" and st["error"].startswith("FFmpegError: ffmpeg exit -9 (killed by signal 9")
+    assert len(st["error"]) <= 330

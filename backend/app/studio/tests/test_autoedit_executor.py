@@ -3,6 +3,7 @@
 Each executor operation rendered on a short generated clip (real ffmpeg, no network): cuts at word boundaries with A/V in sync, cold
 open, captions (incl. Devanagari), text overlay, zoom punch, loudnorm, blurred 9:16 padding, output format; plus caption retiming."""
 import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -244,3 +245,117 @@ def test_cover_is_a_real_frame_with_the_hook_text(tmp_path, clip):
     assert (info["width"], info["height"]) == (1080, 1920)
     assert cover.pick_time({"visionData": {"bestThumbnailFrame": 3.0}}, rr.timeline, rr.duration) == pytest.approx(3.0, abs=0.05)
     assert cover.pick_time({}, rr.timeline, rr.duration) == 1.0
+
+
+# ---- a failed encode must say why, retry lightly, never leave a half-written file, and full-size encodes take turns
+
+class FakeProc:
+    def __init__(self, returncode, stderr=""):
+        self.returncode, self.stderr = returncode, stderr
+
+
+def test_the_ffmpeg_error_starts_with_the_exit_code_and_the_last_line_not_the_banner():
+    banner = "Stream mapping:\n  Stream #0:0 -> #0:0 (h264 (native) -> h264 (libx264))\nusing cpu capabilities: MMX2 SSE2Fast SSSE3\n"
+    msg = ffx._why(FakeProc(1, banner + "Error initializing filter 'ass'\nConversion failed!\n"))
+    assert msg.startswith("ffmpeg exit 1: Conversion failed! ||")
+    assert "using cpu capabilities" in msg and "killed" not in msg
+    assert str(ffx.FFmpegError(msg))[:60].startswith("ffmpeg exit 1")        # the creator-facing str(e)[:300] shows the useful part first
+
+
+def test_a_negative_exit_code_is_reported_as_a_kill_probably_out_of_memory():
+    msg = ffx._why(FakeProc(-9, "frame= 120 fps=9.0\n"))
+    assert msg.startswith("ffmpeg exit -9 (killed by signal 9, probably out of memory): frame= 120")
+    assert ffx._why(FakeProc(137, "x")).startswith("ffmpeg exit 137 (killed by signal 9, probably out of memory)")
+    assert ffx._why(FakeProc(-9, "")).startswith("ffmpeg exit -9 (killed by signal 9, probably out of memory): no output")
+    assert len(ffx._why(FakeProc(1, "a" * 5000))) < 1500
+
+
+def test_ffx_run_turns_a_failure_and_a_timeout_into_ffmpeg_errors(monkeypatch):
+    monkeypatch.setattr(ffx.subprocess, "run", lambda *a, **k: FakeProc(-9, "boom"))
+    with pytest.raises(ffx.FFmpegError, match=r"^ffmpeg exit -9 \(killed by signal 9"):
+        ffx.run(["-version"])
+
+    def slow(*a, **k):
+        raise subprocess.TimeoutExpired("ffmpeg", 5)
+    monkeypatch.setattr(ffx.subprocess, "run", slow)
+    with pytest.raises(ffx.FFmpegError, match="timeout"):
+        ffx.run(["-version"], timeout=5)
+
+
+def test_low_memory_command_adds_one_filter_thread_two_encoder_threads_and_a_lighter_preset():
+    cmd = ["-y", "-i", "in.mp4", "-filter_complex", "g", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-t", "5.0", "-movflags", "+faststart", "out.mp4"]
+    safe = X.low_memory(cmd)
+    assert safe[0] == "-y" and safe[1:3] == ["-filter_complex_threads", "1"]
+    assert safe[safe.index("-preset") + 1] == "superfast" and safe[safe.index("-threads") + 1] == "2"
+    assert safe.index("-threads") < safe.index("-t") and safe[-1] == "out.mp4" and cmd[cmd.index("-preset") + 1] == "veryfast"   # the original is untouched
+
+
+def test_a_killed_full_size_render_is_retried_once_with_low_memory_settings(tmp_path, clip, monkeypatch):
+    real, calls = ffx.run, []
+
+    def flaky(args, timeout=900):
+        calls.append(list(args))
+        if len(calls) == 1:
+            Path(args[-1]).write_bytes(b"half a file")        # what a killed encoder leaves behind
+            raise ffx.FFmpegError("ffmpeg exit -9 (killed by signal 9, probably out of memory): frame= 12")
+        assert not Path(args[-1]).exists()                      # the stale output was removed before the retry
+        return real(args, timeout=timeout)
+    monkeypatch.setattr(ffx, "run", flaky)
+    rr, out, _ = render(tmp_path, clip, [op(1, "loudnorm", "audio")])
+    encodes = [c for c in calls if "-filter_complex" in c and "-crf" in c]
+    assert len(encodes) == 2 and "-filter_complex_threads" not in encodes[0] and "-filter_complex_threads" in encodes[1]
+    assert encodes[1][encodes[1].index("-preset") + 1] == "superfast" and "-threads" in encodes[1]
+    assert any("retried with low-memory settings" in n and "killed by signal 9" in n for n in rr.notes)
+    assert verify.measure(out)["width"] == 1080
+
+
+def test_when_the_retry_fails_too_no_half_written_file_is_left_for_the_render_cache(tmp_path, clip, monkeypatch):
+    calls = []
+
+    def always(args, timeout=900):
+        calls.append(args)
+        Path(args[-1]).write_bytes(b"half a file")
+        raise ffx.FFmpegError("ffmpeg exit -9 (killed by signal 9, probably out of memory): x")
+    monkeypatch.setattr(ffx, "run", always)
+    edl, inp = build([op(1, "loudnorm", "audio")])
+    out = tmp_path / "out.mp4"
+    with pytest.raises(ffx.FFmpegError, match="killed by signal 9"):
+        X.render(edl, inp, clip, out, tmp_path / "w", GROUPS)
+    assert not out.exists()
+    assert len([c for c in calls if "-crf" in c]) == 2
+
+
+def test_a_failed_proxy_render_is_not_retried(tmp_path, clip, monkeypatch):
+    calls = []
+
+    def always(args, timeout=900):
+        calls.append(args)
+        raise ffx.FFmpegError("ffmpeg exit 1: nope")
+    monkeypatch.setattr(ffx, "run", always)
+    edl, inp = build([op(1, "loudnorm", "audio")])
+    with pytest.raises(ffx.FFmpegError):
+        X.render(edl, inp, clip, tmp_path / "p.mp4", tmp_path / "w", GROUPS, proxy=True)
+    assert len([c for c in calls if "-crf" in c]) == 1
+
+
+def test_full_size_renders_take_turns_but_proxies_run_alongside(tmp_path, clip, monkeypatch):
+    import threading
+    import time as _t
+    lock, state = threading.Lock(), {"full": 0, "max_full": 0, "proxy": 0}
+
+    def fake(args, timeout=900):
+        kind = "proxy" if args[args.index("-crf") + 1] == "27" else "full"
+        with lock:
+            state[kind] += 1
+            if kind == "full":
+                state["max_full"] = max(state["max_full"], state["full"])
+        _t.sleep(0.25)
+        with lock:
+            state[kind] -= 1
+    monkeypatch.setattr(ffx, "run", fake)
+    edl, inp = build([op(1, "loudnorm", "audio")])
+    jobs = [(f"f{i}", False) for i in range(3)] + [("p0", True)]
+    ts = [threading.Thread(target=X.render, args=(edl, inp, clip, tmp_path / f"{n}.mp4", tmp_path / f"w{n}", GROUPS), kwargs={"proxy": p}) for n, p in jobs]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert state["max_full"] == 1

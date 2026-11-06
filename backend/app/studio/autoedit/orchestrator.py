@@ -532,6 +532,7 @@ class Runner:
         """Render the creator's file once from the kept ops; in parallel, the combined-edit checks and the informational AI re-score."""
         st, inp = self.state, self.inp
         base_path, base_m = base
+        partial_note = None
         for o in edl.ops:
             o.enabled = o.enabled and o.group in kept
         st["edl"] = edl.model_dump()
@@ -542,9 +543,17 @@ class Runner:
                 kept_proxy = self._proxy(edl, kept, "kept")
             f_sync = pool.submit(self._combined_sync, edl, kept, kept_proxy) if ("captions" in kept and len(kept) > 1 and kept_proxy) else None
             f_score = pool.submit(self._overall_score, base_path, base_m, kept_proxy, edl, kept) if kept and kept_proxy else None
-            final_path, _rr, _key = f_final.result()
+            final_err = None
+            try:
+                final_path, _rr, _key = f_final.result()
+            except Exception as e:   # (the executor already retried once with low-memory settings)
+                log.exception("[AutoEdit] final render failed")
+                final_err = e
             overall = f_score.result() if f_score else None
             sync = f_sync.result() if f_sync else None
+            if final_err is not None:   # the other jobs on this edit have finished, so the ops can be changed safely
+                final_path, partial_note = self._fallback_final(edl, kept, final_err)
+                overall = sync = None
         if sync is not None and not sync["ok"]:  # the captions drifted once combined with the cuts: drop them, say why, render again
             gs = st["groups"]["captions"]
             gs["status"], gs["reasons"] = "reverted", [f"captions went out of sync after the cuts were applied ({sync['detail']}): turned off"]
@@ -553,12 +562,42 @@ class Runner:
             for o in edl.ops:
                 o.enabled = o.enabled and o.group in kept
             st["edl"] = edl.model_dump()
-            final_path, _rr, _key = self.render_set(edl, kept, "final2")
+            try:
+                final_path, _rr, _key = self.render_set(edl, kept, "final2")
+            except Exception as e:
+                log.exception("[AutoEdit] second final render failed")
+                final_path, partial_note = self._fallback_final(edl, kept, e)
         with self.stage("final_checks"):
             final_m = verify.measure(final_path, light=True, ref=self._ref())
         if (final_m["width"], final_m["height"]) != (config.OUT_W, config.OUT_H):
             raise RuntimeError(f"the final render is {final_m['width']}x{final_m['height']}, expected {config.OUT_W}x{config.OUT_H}")
-        self.finalise(edl, final_path, final_m, base_m, overall, bool(kept))
+        self.finalise(edl, final_path, final_m, base_m, overall, bool(kept), partial=partial_note is not None, note=partial_note)
+
+    def _fallback_final(self, edl: EDL, kept: set[str], err: Exception) -> tuple[Path, str]:
+        """The full edit could not be rendered, even after the low-memory retry. Deliver the clean cut instead (the safe pause and loudness
+        fixes, see clean_cut_ids); if that is the very render that just failed, or there is nothing safe to keep, the plain 9:16 conversion
+        of the original. Everything else is marked reverted with the reason. `kept` and the ops are changed in place. Returns (file, note)."""
+        st = self.state
+        failed = set(kept)
+        keep = clean_cut_ids(edl)
+        for o in edl.ops:
+            o.enabled = o.id in keep
+        groups = {o.group for o in edl.ops if o.enabled}
+        if groups == failed:   # the same render again would fail the same way
+            for o in edl.ops:
+                o.enabled = False
+            groups = set()
+        what = "the clean cut (pauses and loudness only)" if groups else "the original in 9:16, with no edits"
+        note = f"The full edit could not be rendered on the server ({str(err)[:120]}), so this is {what}. Your changes are listed below as turned off."
+        for g in failed - groups:
+            gs = st["groups"].setdefault(g, {"label": GROUP_LABEL.get(g, g), "risk": RISK.get(g), "status": "reverted", "reasons": []})
+            gs["status"], gs["reasons"] = "reverted", ["the full-quality render failed on the server, so this change was left out of the delivered video"]
+        kept.clear()
+        kept.update(groups)
+        st["edl"] = edl.model_dump()
+        self.event("error", f"final render failed ({str(err)[:200]}): delivering {what}")
+        path, _rr, _key = self.render_set(edl, groups, "final_clean")
+        return path, note
 
     def _combined_sync(self, edl: EDL, kept: set[str], px: dict) -> dict:
         asr = self._asr(px["path"])
@@ -610,7 +649,8 @@ class Runner:
             log.info("[AutoEdit] ASR of edit failed: %s", e)
             return None
 
-    def finalise(self, edl: EDL, final_path: Path, final_m: dict, base_m: dict | None, overall: dict | None, any_kept: bool, partial: bool = False):
+    def finalise(self, edl: EDL, final_path: Path, final_m: dict, base_m: dict | None, overall: dict | None, any_kept: bool, partial: bool = False,
+                 note: str | None = None):
         st = self.state
         fkey = edit_prefix(self.aid) + "final.mp4"
         self.storage.put_file(fkey, final_path, "video/mp4")
@@ -630,6 +670,8 @@ class Runner:
             log.info("[AutoEdit] cover not made: %s", e)
         st["final"] = {"key": fkey, "metrics": final_m, "overall_scores": overall, "partial": partial, "duration_s": final_m.get("duration_s"),
                        "has_captions": bool(rr.caption_words), "has_overlays": bool(rr.overlays), "style": style}
+        if note:
+            st["final"]["note"] = note
         st["baseline"] = {**(st.get("baseline") or {}), "metrics": base_m}
         self.save()
 

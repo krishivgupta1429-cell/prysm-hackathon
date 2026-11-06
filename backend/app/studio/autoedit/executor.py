@@ -5,9 +5,11 @@ word-boundary cuts with 60-120 ms padding and 40 ms audio cross-fades, a cold-op
 retimed to the new timeline, eased zoom punches about the face, loudnorm to -14 LUFS, and a 1080x1920 H.264 High / AAC output.
 Groups are rendered by passing the set of groups to include; the caller caches and compares the results.
 """
+import contextlib
 import hashlib
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -369,6 +371,42 @@ def plan_pieces(edl: EDL, inp: Inputs, groups: set[str], faces: list[dict] | Non
     return Pieces(active, tl, words_out, overlays, zooms, notes, applied, style, hits)
 
 
+
+# A full-size encode is the memory-hungry step (a 1080x1920 filter graph plus libx264). Two of them at once in one process (two creators, or
+# a re-render next to a run) can get the whole container killed, so they take turns. The 540x960 proxies are small and stay parallel.
+FULL_RENDER_SLOT = threading.BoundedSemaphore(1)
+
+
+def low_memory(cmd: list[str]) -> list[str]:
+    """The same encode with a much smaller memory footprint: one filter thread, two encoder threads, a lighter preset."""
+    safe = list(cmd)
+    safe[1:1] = ["-filter_complex_threads", "1"]   # cmd[0] is "-y"; this is a global option
+    if "-preset" in safe:
+        safe[safe.index("-preset") + 1] = "superfast"
+    last_t = len(safe) - 1 - safe[::-1].index("-t")   # output options go before the final "-t <duration> ... <file>"
+    safe[last_t:last_t] = ["-threads", "2"]
+    return safe
+
+
+def _encode(cmd: list[str], out: Path, proxy: bool, notes: list[str]) -> None:
+    """Run the encode. A full-size one that fails (typically: killed for using too much memory) is retried once with `low_memory`.
+    A half-written file is never left behind: the render cache treats any existing file as a finished render."""
+    out.unlink(missing_ok=True)
+    try:
+        ffx.run(cmd, timeout=1200)
+        return
+    except ffx.FFmpegError as first:
+        out.unlink(missing_ok=True)
+        if proxy:
+            raise
+        notes.append(f"render retried with low-memory settings ({str(first)[:120]})")
+    try:
+        ffx.run(low_memory(cmd), timeout=1200)
+    except ffx.FFmpegError:
+        out.unlink(missing_ok=True)
+        raise
+
+
 def render(edl: EDL, inp: Inputs, src: str | Path, out: str | Path, work: str | Path, groups: set[str], *,
            faces: list[dict] | None = None, duck_wav: str | Path | None = None, preset_x264: str = "veryfast",
            proxy: bool = False) -> RenderResult:
@@ -462,6 +500,7 @@ def render(edl: EDL, inp: Inputs, src: str | Path, out: str | Path, work: str | 
         cmd += ["-c:a", "aac", "-b:a", "96k" if proxy else "192k", "-ar", "48000"]
     cmd += ["-t", _fmt(tl.duration + 0.001), "-movflags", "+faststart", str(out)]
     out.parent.mkdir(parents=True, exist_ok=True)
-    ffx.run(cmd, timeout=1200)
+    with (contextlib.nullcontext() if proxy else FULL_RENDER_SLOT):   # one full-size encode at a time in this process
+        _encode(cmd, out, proxy, notes)
     return RenderResult(path=out, duration=tl.duration, timeline=tl, overlays=overlays, caption_words=words_out, zooms=zooms,
                         ass_path=ass_path, notes=notes, seconds=round(time.time() - t0, 2), ops_applied=applied, style=style, sfx_hits=pc.sfx_hits)

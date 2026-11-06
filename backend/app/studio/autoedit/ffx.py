@@ -17,10 +17,22 @@ class FFmpegError(RuntimeError):
 
 def run(args: list[str], timeout: float = 900) -> subprocess.CompletedProcess:
     cmd = [config.ffmpeg_bin(), "-hide_banner", "-nostdin", *args]
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise FFmpegError(f"ffmpeg exit timeout: no result after {timeout:.0f} s (the process was stopped)") from None
     if p.returncode != 0:
-        raise FFmpegError((p.stderr or "")[-1500:])
+        raise FFmpegError(_why(p))
     return p
+
+
+def _why(p: subprocess.CompletedProcess) -> str:
+    """A readable failure: the exit code first (a negative one means the process was killed, e.g. by the memory limit), then the
+    last line ffmpeg printed, then the tail of its log. The creator-facing error shows only the first ~300 characters."""
+    lines = [ln for ln in (p.stderr or "").strip().splitlines() if ln.strip()]
+    sig = -p.returncode if p.returncode < 0 else 9 if p.returncode == 137 else 0   # 137 = 128 + SIGKILL, what a shell reports
+    killed = f" (killed by signal {sig}, probably out of memory)" if sig else ""
+    return f"ffmpeg exit {p.returncode}{killed}: {(lines[-1] if lines else 'no output')[:160]} || " + (p.stderr or "")[-1200:]
 
 
 def run_stderr(args: list[str], timeout: float = 600) -> str:
@@ -28,7 +40,7 @@ def run_stderr(args: list[str], timeout: float = 600) -> str:
     cmd = [config.ffmpeg_bin(), "-hide_banner", "-nostdin", *args]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if p.returncode != 0:
-        raise FFmpegError((p.stderr or "")[-1500:])
+        raise FFmpegError(_why(p))
     return p.stderr
 
 

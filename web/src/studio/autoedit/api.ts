@@ -14,7 +14,7 @@ export type State = {
   status: string; phase: string; preset: string; presets: string[]; running: boolean; error?: string | null; trace: { t: string; kind: string; msg: string }[]
   changes: Change[]; groups: Record<string, Group>; manual_tips: Tip[]; revisions: { text: string; summary: string[] }[]; revisions_left: number
   baseline?: { metrics: Metrics } | null
-  final?: { metrics: Metrics; overall_scores?: { before: Record<string, number>; after: Record<string, number>; notes?: string } | null; partial?: boolean; not_rescored?: boolean; objective_checks?: { group: string; name: string; ok: boolean; detail: string }[]; has_captions?: boolean } | null
+  final?: { metrics: Metrics; overall_scores?: { before: Record<string, number>; after: Record<string, number>; notes?: string } | null; partial?: boolean; note?: string; not_rescored?: boolean; objective_checks?: { group: string; name: string; ok: boolean; detail: string }[]; has_captions?: boolean } | null
   cost?: { total_usd: number }
   packs?: Record<string, { label: string; headline: string; caption: string; accent: string; animation: string; for: string }>; intensities?: string[]
   style?: { pack?: string | null; font_headline?: string | null; font_caption?: string | null; animation?: string | null; intensity?: string; sfx?: boolean; pack_source?: string }

@@ -493,6 +493,7 @@ function EditStudio({ analysisId }: { analysisId?: string }) {
         {head}
         {st.error && <p style={{ ...muted, color: '#9b1c1c', margin: '0 0 12px' }}>{st.status === 'stopped' ? st.error + ' The changes verified so far are kept.' : st.error}</p>}
         {err && <p style={{ ...muted, color: '#9b1c1c', margin: '0 0 12px' }}>{err}</p>}
+        {done && st.final?.note && <p className="p-card" style={{ ...muted, color: INK, padding: '10px 14px', margin: '0 0 12px' }} data-testid="final-note">{st.final.note}</p>}
         {done && <Summary st={st} />}
 
         {(st.running || !done) && (
